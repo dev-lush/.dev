@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/bot.js",
   "scripts": {
-    "start": "npm install && node dist/bot.js",
+    "start": "node dist/bot.js",
     "build": "tsc",
     "dev": "nodemon --loader ts-node/esm src/bot.ts",
     "deploy": "ts-node src/deploy-commands.ts",
