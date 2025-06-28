@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+      "target": "ES2020",
+      "module": "ESNext", // Important: Use ESNext
+      "strict": true,
+      "esModuleInterop": true,
+      "forceConsistentCasingInFileNames": true,
+      "skipLibCheck": true,
+      "outDir": "dist",
+      "rootDir": "src",
+      "resolveJsonModule": true,
+      "noImplicitAny": true,
+      "moduleResolution": "node",
+      "allowSyntheticDefaultImports": true,
+      "baseUrl": "./",
+      "paths": {
+          "*": ["src/*", "*"]
+      }
+  },
+  "include": [
+      "src/**/*.ts",
+      "src/deploy-commands.ts"
+  ],
+  "exclude": [
+      "node_modules",
+      "dist"
+  ]
+}
