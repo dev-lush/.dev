@@ -1,7 +1,1 @@
-﻿{
-  "description": "Developer-focused support for the Discord API and bot development.",
-  "error_not_found": "## <:Active_Dev:1427669271764537475> </support developer:1427668491170742455>\nYou are in the **developer** support section, with resources for the Discord API. You've seen this message because this section is on hold while we tidy things up.\n\nFor API questions, please use the [Discord API documentation repository](<https://github.com/discord/discord-api-docs>). For issues with this application, email <thediscordtimes@gmail.com>. For developer support, file a ticket at [dis.gd/support](https://dis.gd/developer-support).\n-# <:Warning:1395719352560648274> This app is not directly maintained by **Discord Inc.**",
-  "recommendations": [
-    "Support Resources"
-  ]
-}
+
