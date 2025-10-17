@@ -19,7 +19,7 @@ let isFirstPoll = true;
  * @returns A string representing the content type (e.g., 'image/png').
  */
 function getContentType(url) {
-    const extension = (url.split('?')[0].split('.').pop() || '').toLowerCase();
+    const extension = (String(url).split('?')[0].split('.').pop() || '').toLowerCase();
     switch (extension) {
         case 'jpg':
         case 'jpeg':
@@ -28,44 +28,62 @@ function getContentType(url) {
             return 'image/png';
         case 'gif':
             return 'image/gif';
+        case 'webp':
+            return 'image/webp';
+        case 'svg':
+        case 'svg+xml':
+            return 'image/svg+xml';
         case 'mp4':
             return 'video/mp4';
         case 'mov':
             return 'video/quicktime';
         case 'webm':
             return 'video/webm';
+        case 'txt':
+            return 'text/plain';
         default:
             // Default for unknown types
             return 'application/octet-stream';
     }
 }
 /**
- * Sanitizes a filename by replacing spaces with underscores and removing characters
- * that are not alphanumeric, underscores, hyphens, or periods.
- * @param filename The original filename.
- * @returns A sanitized filename string.
+ * Sanitizes a filename by replacing whitespace with underscores, removing disallowed characters,
+ * while allowing letters, numbers, dot, underscore, hyphen and square/round brackets.
+ * Examples:
+ *  - "[This] image.png" -> "[This]_image.png"
+ *  - "my (weird) file!.svg" -> "my_(weird)_file.svg"
  */
 function sanitizeFilename(filename) {
-    // Replace spaces and other whitespace with underscores
-    let sanitized = filename.replace(/\s/g, '_');
-    // Remove any character that is not a letter, number, dot, underscore, or hyphen.
-    sanitized = sanitized.replace(/[^a-zA-Z0-9._-]/g, '');
+    if (!filename)
+        return 'attachment';
+    // Convert to string
+    let sanitized = String(filename);
+    // Replace whitespace sequences with a single underscore
+    sanitized = sanitized.replace(/\s+/g, '_');
+    // Allow letters, numbers, dot, underscore, hyphen, parentheses and square brackets
+    sanitized = sanitized.replace(/[^a-zA-Z0-9._\-\[\]\(\)]/g, '');
+    // Collapse multiple underscores
+    sanitized = sanitized.replace(/_+/g, '_');
+    // Trim leading/trailing underscores or dots
+    sanitized = sanitized.replace(/^[_\.]+|[_\.]+$/g, '');
+    if (!sanitized)
+        return 'attachment';
     return sanitized;
 }
 /**
  * Generates a unique filename to avoid collisions within a single message payload.
  * If the desired name already exists, it appends a counter (e.g., 'file-1.txt').
- * @param desiredName The preferred filename.
+ * @param nameFile The preferred filename.
  * @param existingFiles The list of files already added to the payload.
  * @returns A unique filename string.
  */
-function getUniqueFilename(desiredName, existingFiles) {
+function getUniqueFilename(nameFile, existingFiles) {
     const existingNames = new Set(existingFiles.map(f => f.name));
-    if (!existingNames.has(desiredName)) {
-        return desiredName;
+    if (!existingNames.has(nameFile)) {
+        return nameFile;
     }
-    const ext = path.extname(desiredName);
-    const base = path.basename(desiredName, ext);
+    const ext = path.extname(nameFile);
+    const base = path.basename(nameFile, ext);
     let counter = 1;
     let newName;
     do {
@@ -92,7 +110,7 @@ export async function isTokenLoaded() {
  */
 export async function buildCommitCommentPayload(options, sections) {
     const { sha, commentId, commentUrl, author, authorUrl, body, attachments = [], allRolesForSub = [], isNewComment = true } = options;
-    const shortSha = `[\`${sha.slice(0, 7)}\`](https://github.com/Discord-Datamining/Discord-Datamining/commit/${sha})`;
+    const shortSha = `[\`${sha?.slice?.(0, 7) ?? sha}\`](https://github.com/Discord-Datamining/Discord-Datamining/commit/${sha})`;
     // --- START: Pings logic ---
     let pings;
     if (allRolesForSub.length > 0) {
@@ -144,8 +162,18 @@ export async function buildCommitCommentPayload(options, sections) {
     // Prepare attachments
     const files = [];
     let totalLength = comps.reduce((acc, c) => acc + (c.content?.length || 0), 0);
-    const supportedMediaTypes = ['image/jpeg', 'image/png', 'image/gif', 'video/mp4', 'video/quicktime', 'video/webm'];
+    // supported media types (SVG intentionally omitted -> handled as file)
+    const supportedMediaTypes = [
+        'image/jpeg',
+        'image/png',
+        'image/gif',
+        'image/webp',
+        'video/mp4',
+        'video/quicktime',
+        'video/webm'
+    ];
     const processedAttachmentUrls = new Set();
+    // helper to process a content string that may contain image markdown links
     const processContent = async (content, sectionIdx) => {
         const parts = content.split(/(!\[[^\]]*\]\([^\)]+\))/g).filter(p => p);
         let textBuffer = '';
@@ -157,6 +185,20 @@ export async function buildCommitCommentPayload(options, sections) {
             const fileItems = [];
             const MAX_ATTACHMENTS = 10;
             const attachmentsToProcess = imageGroup.slice(0, Math.max(0, MAX_ATTACHMENTS - files.length));
+            // mapping from content-type -> extension for when the filename has no extension
+            const contentTypeToExt = {
+                'image/jpeg': '.jpg',
+                'image/jpg': '.jpg',
+                'image/png': '.png',
+                'image/gif': '.gif',
+                'image/webp': '.webp',
+                'image/svg+xml': '.svg',
+                'video/mp4': '.mp4',
+                'video/quicktime': '.mov',
+                'video/webm': '.webm',
+                'text/plain': '.txt',
+                'application/octet-stream': '.bin'
+            };
             for (const [i, attachment] of attachmentsToProcess.entries()) {
                 processedAttachmentUrls.add(attachment.url);
                 processedAttachmentUrls.add(attachment.download_url);
@@ -166,16 +208,43 @@ export async function buildCommitCommentPayload(options, sections) {
                         const finalContentType = resp.headers.get('content-type')?.split(';')[0] || attachment.content_type || 'application/octet-stream';
                         const arrBuf = await resp.arrayBuffer();
                         if (arrBuf.byteLength > 0) {
-                            const uniqueDisplayName = getUniqueFilename(attachment.name, files);
+                            // Prefer attachment.name when present; fall back to URL segment
+                            const rawName = (attachment.name && String(attachment.name)) ||
+                                (attachment.download_url && attachment.download_url.substring(attachment.download_url.lastIndexOf('/') + 1)) ||
+                                (attachment.url && attachment.url.substring(attachment.url.lastIndexOf('/') + 1)) ||
+                                `attachment-${commentId}`;
+                            let nameFile = sanitizeFilename(rawName);
+                            // If no ext found, try to append based on content-type
+                            if (!path.extname(nameFile)) {
+                                const mapped = contentTypeToExt[finalContentType];
+                                if (mapped) {
+                                    // If mapping exists and is non-empty, append it
+                                    if (mapped !== '') {
+                                        nameFile = `${nameFile}${mapped}`;
+                                    }
+                                    else {
+                                        nameFile = `${nameFile}.bin`;
+                                    }
+                                }
+                                else {
+                                    // Unknown content-type: fallback
+                                    nameFile = `${nameFile}.bin`;
+                                }
+                            }
+                            const uniqueDisplayName = getUniqueFilename(nameFile, files);
+                            // push actual file buffer with a proper name
+                            files.push({ attachment: Buffer.from(arrBuf), name: uniqueDisplayName });
                             if (supportedMediaTypes.includes(finalContentType)) {
-                                files.push({ attachment: Buffer.from(arrBuf), name: uniqueDisplayName });
                                 mediaItems.push({ media: { url: `attachment://${uniqueDisplayName}` } });
                             }
                             else {
-                                files.push({ attachment: Buffer.from(arrBuf), name: uniqueDisplayName });
+                                // non-preview file (including svg) should be type 13
                                 fileItems.push({ type: 13, file: { url: `attachment://${uniqueDisplayName}`, name: uniqueDisplayName } });
                             }
                         }
+                    }
+                    else {
+                        console.warn(`[commitMessage] Failed to download attachment ${attachment.url}: ${resp.status}`);
                     }
                 }
                 catch (error) {
@@ -259,7 +328,8 @@ export async function buildCommitCommentPayload(options, sections) {
         for (let i = 0; i < remainingAttachments.length; i += CHUNK_SIZE) {
             const chunk = remainingAttachments.slice(i, i + CHUNK_SIZE);
             const buttonComponents = chunk.map(attachment => {
-                const isMedia = supportedMediaTypes.includes(getContentType(attachment.download_url || attachment.name));
+                const atContentType = attachment.content_type || getContentType(attachment.download_url || attachment.name || attachment.url || '');
+                const isMedia = supportedMediaTypes.includes(atContentType);
                 return {
                     type: 2, style: 5,
                     label: attachment.name.length > 80 ? `${attachment.name.slice(0, 77)}...` : attachment.name,
@@ -291,6 +361,21 @@ export async function buildCommitCommentPayload(options, sections) {
     if (pings) {
         payload.components.push({ type: 10, content: pings });
     }
+    /*
+    // Debug output to verify mapping between uploaded file names and component references
+    try {
+      console.debug('[commitMessage] sending payload files:', (files || []).map((f: any) => f.name));
+      const mediaRefs = comps
+        .filter(c => c.type === 12)
+        .flatMap((c: any) => (c.items || []).map((it: any) => it.media?.url))
+        .filter(Boolean);
+      const fileRefs = comps.filter(c => c.type === 13).map(c => c.file);
+      console.debug('[commitMessage] components media refs:', mediaRefs);
+      console.debug('[commitMessage] components file refs:', fileRefs);
+    } catch (e) {
+      // Best-effort debug - don't throw if console formatting fails
+    }
+    */
     return payload;
 }
 /**
@@ -521,8 +606,6 @@ export async function checkNewCommitComments(client) {
                             await sub.save();
                         }
                         catch (saveErr) {
-                            // saveErr typed as unknown to satisfy strict typing.
-                            // Log full error to console for debugging.
                             console.error(`[polling] Failed to persist lastCommentId for subscription ${sub._id} (guild ${sub.guildId}, channel ${sub.channelId}):`, saveErr);
                         }
                     }
