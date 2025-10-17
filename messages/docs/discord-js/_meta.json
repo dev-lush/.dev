@@ -1,0 +1,6 @@
+{
+    "description": "Documentation and resources related to the discord.js library",
+    "content": {
+        "error_not_found": "# </docs discord-js:1407253844731232257>\nYou are using the **discord-js** subcommand, where you could find resources and documentation for developing in Discord's environment using the [`discord.js`](<https://discord.js.org>) library—a powerful JavaScript/[TypeScript](<https://typescriptlang.org>) library for interacting with the Discord API. The stored messages you're seeing are based off the official [discord.js documentation](https://discord.js.org). You've seen this message because it seems you're a little lost navigating through the queries. Here are some featured queries you can try:\n- <query-1>\n- <query-2>\n- <query-3>\n\nIf you wish to request adding more docs, reporting an issue, or providing feedback for this application, please submit an inquiry via email at <thediscordtimes@gmail.com>. If you wish to submit a correction regarding the documentations, you can submit a pull request to the [discordjs/docs repository](https://github.com/discordjs/docs)."
+    }
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Send example messages from the playground.",
+  "error_not_found": "**Error 404**: The requested example message could not be found."
+}

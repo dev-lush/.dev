@@ -1,0 +1,28 @@
+{
+  "name": "Test Message",
+  "description": "A sample message with an interactive component.",
+  "pages": [
+    {
+      "value": "main_page",
+      "content": "Email me 👀",
+      "components": [
+        {
+          "type": 1,
+          "components": [
+            {
+              "type": 2,
+              "label": "lushdashblaze@gmail.com",
+              "style": 5,
+              "emoji": {
+                "id": "1424726710741635205",
+                "name": "Mail",
+                "animated": false
+              },
+              "url": "mailto:lushdashblaze@gmail.com"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
