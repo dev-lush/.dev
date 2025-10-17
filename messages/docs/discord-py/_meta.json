@@ -1,6 +1,1 @@
-{
-    "description": "Documentation and resources related to the discord.py library",
-    "content": {
-        "error_not_found": "# </docs discord-py:1407253844731232257>\nYou are using the **discord-py** subcommand, where you could find resources and documentation for developing in Discord's environment using the [`discord.py`](http://discordpy.rtfd.org/en/latest) library—an API wrapper for Discord written in [Python](<https://www.python.org/>). The stored messages you're seeing are based off the official [discord.py documentation](https://discordpy.readthedocs.io). You've seen this message because it seems you're a little lost navigating through the queries. Here are some featured queries you can try:\n- <query-1>\n- <query-2>\n- <query-3>\n\nIf you wish to request adding more docs, reporting an issue, or providing feedback for this application, please submit an inquiry via email at <thediscordtimes@gmail.com>. If you wish to submit a correction regarding the documentations, you can submit a pull request to the [`discord.py/docs` repository](https://github.com/Rapptz/discord.py)."
-    }
-}
+
