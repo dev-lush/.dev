@@ -271,7 +271,7 @@ export async function buildCommitCommentPayload(
                                 mediaItems.push({ media: { url: `attachment://${uniqueDisplayName}` } });
                             } else {
                                 files.push({ attachment: Buffer.from(arrBuf), name: uniqueDisplayName });
-                                fileItems.push({ type: 13, file: { url: `attachment://${uniqueDisplayName}` } });
+                                fileItems.push({ type: 13, file: { url: `attachment://${uniqueDisplayName}`, name: uniqueDisplayName } });
                             }
                         }
                     }
@@ -310,7 +310,7 @@ export async function buildCommitCommentPayload(
                         
                         files.push({ attachment: Buffer.from(diff.content, 'utf8'), name: displayName });
                         
-                        comps.push({ type: 13, file: { url: `attachment://${displayName}` } });
+                        comps.push({ type: 13, file: { url: `attachment://${displayName}`, name: displayName } });
                         
                         trimmed = trimmed.replace(diff.fullMatch, '');
                         diffsAttachedCount++;
