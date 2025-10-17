@@ -173,7 +173,7 @@ export async function buildCommitCommentPayload(options, sections) {
                             }
                             else {
                                 files.push({ attachment: Buffer.from(arrBuf), name: uniqueDisplayName });
-                                fileItems.push({ type: 13, file: { url: `attachment://${uniqueDisplayName}` } });
+                                fileItems.push({ type: 13, file: { url: `attachment://${uniqueDisplayName}`, name: uniqueDisplayName } });
                             }
                         }
                     }
@@ -208,7 +208,7 @@ export async function buildCommitCommentPayload(options, sections) {
                         const displayNameNumPart = diffsToProcess.length > 1 ? `-(${diffsAttachedCount + 1})` : '';
                         const displayName = `${commentId}${displayNameNumPart}.txt`;
                         files.push({ attachment: Buffer.from(diff.content, 'utf8'), name: displayName });
-                        comps.push({ type: 13, file: { url: `attachment://${displayName}` } });
+                        comps.push({ type: 13, file: { url: `attachment://${displayName}`, name: displayName } });
                         trimmed = trimmed.replace(diff.fullMatch, '');
                         diffsAttachedCount++;
                     }
