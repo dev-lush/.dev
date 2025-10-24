@@ -1,11 +1,11 @@
-import { SlashCommandBuilder, ModalBuilder, ChannelType, PermissionsBitField, MessageFlags, LabelBuilder, MentionableSelectMenuBuilder, StringSelectMenuBuilder, ActionRowBuilder, ComponentType, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
+/**
+ * @file Slash command to manage guild channels (create, edit, permissions).
+ */
+import { SlashCommandBuilder, ModalBuilder, ChannelType, PermissionsBitField, MessageFlags, LabelBuilder, ChannelSelectMenuBuilder, MentionableSelectMenuBuilder, StringSelectMenuBuilder, ActionRowBuilder, ComponentType, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
 import crypto from 'crypto';
 import { commandGuard } from '../../Utils/commandGuard.js';
 import { permissions as channelPermissions } from '../../Utils/permissions.js';
 import { buildAuditLogReasonPlain } from '../../Utils/auditLog.js';
-/**
- * @file Slash command to manage guild channels (create, edit, permissions).
- */
 // A temporary in-memory store to pass the audit log reason from the command to the modal handler.
 const reasonStore = new Map();
 // --- START: Data for Dynamic Permission Descriptions ---
@@ -206,8 +206,8 @@ export default {
         .setName('edit')
         .setDescription('Edit an existing channel.')
         .addChannelOption(option => option.setName('channel')
-        .setDescription('The channel to edit.')
-        .setRequired(true)
+        .setDescription('The channel to edit. Defaults to the current channel.')
+        .setRequired(false)
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum, ChannelType.GuildMedia, ChannelType.GuildVoice, ChannelType.GuildStageVoice))
         .addStringOption(option => option.setName('name')
         .setDescription('The new name for the channel.')
@@ -265,8 +265,8 @@ async function handleCreate(interaction) {
     const name = interaction.options.getString('name', true);
     const type = interaction.options.getInteger('type') ?? ChannelType.GuildText;
     const parent = interaction.options.getChannel('category');
-    const reason = interaction.options.getString('reason');
-    const auditLogReason = reason ? buildAuditLogReasonPlain(interaction.user.id, reason) : undefined;
+    let reason = interaction.options.getString('reason') || undefined;
+    const auditLogReason = buildAuditLogReasonPlain(interaction.user.id, reason);
     const newChannel = await interaction.guild.channels.create({
         name,
         type: type,
@@ -283,12 +283,12 @@ async function handleCreate(interaction) {
  */
 async function handleEdit(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const channel = interaction.options.getChannel('channel', true);
+    const channel = (interaction.options.getChannel('channel') ?? interaction.channel);
     const newName = interaction.options.getString('name');
     const newDescription = interaction.options.getString('description');
     const newParent = interaction.options.getChannel('category');
-    const reason = interaction.options.getString('reason');
-    const auditLogReason = reason ? buildAuditLogReasonPlain(interaction.user.id, reason) : undefined;
+    let reason = interaction.options.getString('reason') || undefined;
+    const auditLogReason = buildAuditLogReasonPlain(interaction.user.id, reason);
     const editOptions = { reason: auditLogReason };
     if (newName)
         editOptions.name = newName;
@@ -326,15 +326,44 @@ async function showPermsModal(interaction, targetChannel, permissionOptions, uui
     const modal = new ModalBuilder()
         .setCustomId(customId)
         .setTitle(modalTitle);
+    /**
+     * An array of `ChannelType` enums that are permitted for a specific action or command.
+     * This is used to validate that a target channel is of an acceptable type.
+     */
+    let allowedChannelTypes = [];
+    switch (targetChannel.type) {
+        case ChannelType.GuildText:
+        case ChannelType.GuildAnnouncement:
+            allowedChannelTypes = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
+            break;
+        case ChannelType.GuildForum:
+        case ChannelType.GuildMedia:
+            allowedChannelTypes = [ChannelType.GuildForum, ChannelType.GuildMedia];
+            break;
+        case ChannelType.GuildVoice:
+        case ChannelType.GuildStageVoice:
+            allowedChannelTypes = [ChannelType.GuildVoice, ChannelType.GuildStageVoice];
+            break;
+    }
+    const channelSelectLabel = new LabelBuilder()
+        .setLabel('Additional Channels')
+        .setDescription('Apply the same permission changes to other channels of the same type.')
+        .setChannelSelectMenuComponent(new ChannelSelectMenuBuilder()
+        .setCustomId('channel_perms_channel_select')
+        .setPlaceholder('Select other channels (optional)')
+        .setMinValues(0)
+        .setMaxValues(25)
+        .addChannelTypes(...allowedChannelTypes)
+        .setRequired(false));
     const targetsMenu = new LabelBuilder()
         .setLabel('Configure Permissions')
-        .setDescription('Select server members or roles to apply permission changes for this channel.')
+        .setDescription('Select server members or roles to apply permission changes to. Leave empty to target @everyone.')
         .setMentionableSelectMenuComponent(new MentionableSelectMenuBuilder()
         .setCustomId('channel_perms_targets')
         .setPlaceholder('Select users and/or roles to apply permissions to')
-        .setMinValues(1)
+        .setMinValues(0)
         .setMaxValues(25)
-        .setRequired(true));
+        .setRequired(false));
     const allowMenu = new LabelBuilder()
         .setLabel('Allow Permissions')
         .setDescription('Select permissions to ALLOW for the selected targets.')
@@ -365,9 +394,10 @@ async function showPermsModal(interaction, targetChannel, permissionOptions, uui
         .setMaxValues(Math.min(25, permissionOptions.length))
         .addOptions(permissionOptions)
         .setRequired(false));
-    modal.setLabelComponents(targetsMenu.toJSON(), allowMenu.toJSON(), inheritMenu.toJSON(), denyMenu.toJSON());
+    modal.setLabelComponents(channelSelectLabel.toJSON(), targetsMenu.toJSON(), allowMenu.toJSON(), inheritMenu.toJSON(), denyMenu.toJSON());
     if (interaction.isModalSubmit())
         return; // Type guard
+    // console.log('[channel] modal JSON:', JSON.stringify(modal.toJSON(), null, 2));
     await interaction.showModal(modal);
 }
 /**
@@ -450,11 +480,8 @@ async function handlePermissionModal(interaction) {
     else {
         // For other channel types, show the modal directly.
         const relevantPermissions = getRelevantPermissions(targetChannel.type);
-        if (relevantPermissions.length === 0) {
-            await interaction.reply({
-                content: '<:Cross:1425291759952593066> Could not determine relevant permissions for this channel type.',
-                flags: MessageFlags.Ephemeral
-            });
+        if (!relevantPermissions) {
+            await interaction.reply({ content: '<:Cross:1425291759952593066> Cannot determine relevant permissions for this channel type.', flags: MessageFlags.Ephemeral });
             return;
         }
         const permissionOptions = buildPermissionOptionsForChannel(targetChannel, relevantPermissions);
@@ -565,188 +592,279 @@ export async function handleChannelPermsModal(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     // Extract the target channel ID and potential reason UUID from the modal's custom ID.
     const parts = (interaction.customId ?? '').split(':');
-    const channelId = parts[1];
+    const primaryChannelId = parts[1];
     const uuid = parts.length > 2 ? parts[2] : undefined;
     let reason;
     if (uuid) {
         reason = reasonStore.get(uuid);
-        reasonStore.delete(uuid); // Clean up immediately after retrieval
+        reasonStore.delete(uuid);
     }
     const auditLogReason = buildAuditLogReasonPlain(interaction.user.id, reason);
-    if (!channelId) {
+    if (!primaryChannelId) {
         await interaction.editReply({ content: '<:Cross:1425291759952593066> Could not identify the target channel from the interaction.' });
         return;
     }
-    const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
-    if (!channel) {
-        await interaction.editReply({ content: '<:Cross:1425291759952593066> The channel could not be found or is no longer available.' });
+    const primaryChannel = await interaction.guild.channels.fetch(primaryChannelId).catch(() => null);
+    if (!primaryChannel) {
+        await interaction.editReply({ content: '<:Cross:1425291759952593066> The target channel could not be found.' });
         return;
     }
-    // Retrieve the selected values from the modal's select menus.
-    const targets = getModalSelectValues(interaction, 'channel_perms_targets');
+    // Get raw modal select values
+    const selectedChannelIds = getModalSelectValues(interaction, 'channel_perms_channel_select');
+    const rawTargets = getModalSelectValues(interaction, 'channel_perms_targets');
     const allowValues = getModalSelectValues(interaction, 'channel_perms_allow');
     const inheritValues = getModalSelectValues(interaction, 'channel_perms_inherit');
     const denyValues = getModalSelectValues(interaction, 'channel_perms_deny');
-    if (!targets || targets.length === 0) {
-        await interaction.editReply({ content: '<:Cross:1425291759952593066> You must select at least one target (user or role) to apply permission changes.' });
-        return;
+    // Build allowed channel-type groups used by the modal (same logic as showPermsModal)
+    let allowedChannelTypes = [];
+    switch (primaryChannel.type) {
+        case ChannelType.GuildText:
+        case ChannelType.GuildAnnouncement:
+            allowedChannelTypes = [ChannelType.GuildText, ChannelType.GuildAnnouncement];
+            break;
+        case ChannelType.GuildForum:
+        case ChannelType.GuildMedia:
+            allowedChannelTypes = [ChannelType.GuildForum, ChannelType.GuildMedia];
+            break;
+        case ChannelType.GuildVoice:
+            allowedChannelTypes = [ChannelType.GuildVoice];
+            break;
+        case ChannelType.GuildStageVoice:
+            allowedChannelTypes = [ChannelType.GuildStageVoice];
+            break;
+        default:
+            allowedChannelTypes = [
+                ChannelType.GuildText, ChannelType.GuildVoice,
+                ChannelType.GuildCategory, ChannelType.GuildAnnouncement,
+                ChannelType.GuildStageVoice, ChannelType.GuildForum,
+                ChannelType.GuildMedia
+            ];
+            break;
     }
-    try {
-        // Keep the numeric bit accumulations for final summary/calculations
-        const allowBits = allowValues.reduce((acc, val) => acc | BigInt(val), 0n);
-        const inheritBits = inheritValues.reduce((acc, val) => acc | BigInt(val), 0n);
-        const denyBits = denyValues.reduce((acc, val) => acc | BigInt(val), 0n);
-        // Map selected values -> permission name sets (safer than relying on combined bit math)
-        const valuesToPermissionNameSet = (values) => {
-            const s = new Set();
-            for (const v of values ?? []) {
-                try {
-                    const names = new PermissionsBitField(BigInt(v)).toArray();
-                    for (const n of names)
-                        s.add(n);
-                }
-                catch (err) {
-                    console.warn('[channel] invalid permission value while mapping to names:', v, err);
-                }
-            }
-            return s;
-        };
-        const allowSet = valuesToPermissionNameSet(allowValues);
-        const denySet = valuesToPermissionNameSet(denyValues);
-        const inheritSet = valuesToPermissionNameSet(inheritValues);
-        // Union of all permission-names selected
-        const unionNames = new Set([...allowSet, ...denySet, ...inheritSet]);
-        const overwriteOptions = {};
-        const finalAllowNames = [];
-        const finalDenyNames = [];
-        // Priority: Inherit (null) > Deny (false) > Allow (true)
-        for (const permName of unionNames) {
-            if (inheritSet.has(permName)) {
-                overwriteOptions[permName] = null;
-            }
-            else if (denySet.has(permName)) {
-                overwriteOptions[permName] = false;
-                finalDenyNames.push(permName);
-            }
-            else if (allowSet.has(permName)) {
-                overwriteOptions[permName] = true;
-                finalAllowNames.push(permName);
+    // Validate selected additional channels server-side and notify user if any were rejected.
+    const filteredChannelIds = [];
+    const rejectedChannelMentions = [];
+    for (const cid of selectedChannelIds ?? []) {
+        const ch = await interaction.guild.channels.fetch(cid).catch(() => null);
+        if (!ch) {
+            rejectedChannelMentions.push(`#${cid} (not found)`);
+            continue;
+        }
+        if (!allowedChannelTypes.includes(ch.type)) {
+            rejectedChannelMentions.push(`<#${cid}>`);
+            continue;
+        }
+        filteredChannelIds.push(cid);
+    }
+    if (rejectedChannelMentions.length > 0) {
+        const note = `<:Warning:1395719352560648274> Some selected channels were ignored because they are not the same channel type as <#${primaryChannelId}>:\n${rejectedChannelMentions.join(', ')}`;
+        await interaction.followUp({ content: note, flags: MessageFlags.Ephemeral });
+    }
+    // If targets empty -> default to @everyone role id
+    const finalTargets = (rawTargets && rawTargets.length > 0) ? rawTargets.slice() : [interaction.guild.roles.everyone.id];
+    const permKeyToFriendly = {};
+    const permKeyToValue = {};
+    for (const p of channelPermissions) {
+        try {
+            const pf = new PermissionsBitField(BigInt(p.value)).toArray();
+            const key = pf[0];
+            if (key) {
+                permKeyToFriendly[key] = p.name;
+                permKeyToValue[key] = BigInt(p.value);
             }
         }
-        // Re-create the PermissionsBitField instances from the corrected names for the summary message.
-        // Cast through unknown->any so TypeScript accepts the dynamic string arrays as BitFieldResolvable.
-        const finalAllow = new PermissionsBitField(finalAllowNames);
-        const finalDeny = new PermissionsBitField(finalDenyNames);
-        // Track changes across all targets for summary
-        let totalAllowedChanges = 0n;
-        let totalDeniedChanges = 0n;
-        let totalInheritedChanges = 0n;
-        const userIds = [];
-        const roleIds = [];
-        /*
-        // ---------- Instrumented per-target apply loop ----------
-        console.log('[channel-debug] targets ->', targets);
-        console.log('[channel-debug] allowValues ->', allowValues);
-        console.log('[channel-debug] inheritValues ->', inheritValues);
-        console.log('[channel-debug] denyValues ->', denyValues);
-
-        // Show the permission-name sets we derived from selected values
-        console.log('[channel-debug] allowSet ->', [...allowSet].sort());
-        console.log('[channel-debug] inheritSet ->', [...inheritSet].sort());
-        console.log('[channel-debug] denySet ->', [...denySet].sort());
-        console.log('[channel-debug] unionNames ->', [...unionNames].sort());
-
-        // Show the final overwriteOptions we're about to send
-        console.log('[channel-debug] overwriteOptions ->', overwriteOptions);
-
-        // Also print numeric bitfields for reference
-        console.log('[channel-debug] numeric bits -> allowBits=', allowBits?.toString(), ' inheritBits=', inheritBits?.toString(), ' denyBits=', denyBits?.toString());
-        console.log('[channel-debug] finalAllow.bitfield=', finalAllow.bitfield?.toString(), ' finalDeny.bitfield=', finalDeny.bitfield?.toString());
-        */
-        for (const id of targets) {
-            const currentOverwrites = channel.permissionOverwrites.cache.get(id);
-            // const currentAllowNames = currentOverwrites?.allow?.toArray() ?? [];
-            // const currentDenyNames = currentOverwrites?.deny?.toArray() ?? [];
-            // console.log(`[channel-debug] BEFORE apply for ${id} -> currentAllowNames:`, currentAllowNames, ' currentDenyNames:', currentDenyNames, ' rawAllowBitfield:', currentOverwrites?.allow?.bitfield?.toString(), ' rawDenyBitfield:', currentOverwrites?.deny?.bitfield?.toString());
+        catch { /* skip invalid */ }
+    }
+    // Convert the selected option bit-values (strings) into permission KEYS (like "ViewChannel")
+    const valuesToKeySet = (values) => {
+        const s = new Set();
+        for (const v of values ?? []) {
             try {
-                // Print the exact object we will send (again) for clarity
-                // console.log(`[channel-debug] editing overwrites for ${id} with ->`, overwriteOptions);
-                await channel.permissionOverwrites.edit(id, overwriteOptions, { reason: auditLogReason });
+                const names = new PermissionsBitField(BigInt(v)).toArray();
+                for (const n of names)
+                    s.add(n);
             }
-            catch (err) {
-                console.error(`[channel] failed to edit permission overwrites for ${id}:`, err);
-                await interaction.followUp({ content: `<:Cross:1425291759952593066> Failed to update permissions for ${id}: ${String(err)}`, flags: MessageFlags.Ephemeral });
-                continue;
-            }
-            /*
-            // Fetch the overwrite back from cache/REST so we can show what Discord stored
-            const afterOverwrites = channel.permissionOverwrites.cache.get(id);
-            const afterAllowNames = afterOverwrites?.allow?.toArray() ?? [];
-            const afterDenyNames = afterOverwrites?.deny?.toArray() ?? [];
-            console.log(`[channel-debug] AFTER apply for ${id} -> afterAllowNames:`, afterAllowNames, ' afterDenyNames:', afterDenyNames, ' rawAllowBitfield:', afterOverwrites?.allow?.bitfield?.toString(), ' rawDenyBitfield:', afterOverwrites?.deny?.bitfield?.toString());
-            */
+            catch (err) { /* ignore */ }
+        }
+        return s;
+    };
+    const allowSet = valuesToKeySet(allowValues);
+    const denySet = valuesToKeySet(denyValues);
+    const inheritSet = valuesToKeySet(inheritValues);
+    const unionKeys = new Set([...allowSet, ...denySet, ...inheritSet]);
+    const overwriteOptions = {};
+    for (const key of unionKeys) {
+        if (inheritSet.has(key))
+            overwriteOptions[key] = null;
+        else if (denySet.has(key))
+            overwriteOptions[key] = false;
+        else if (allowSet.has(key))
+            overwriteOptions[key] = true;
+    }
+    // Channels to apply: primary plus additional filtered channels (dedupe)
+    const channelsToApply = (filteredChannelIds && filteredChannelIds.length > 0)
+        ? Array.from(new Set([primaryChannelId, ...filteredChannelIds]))
+        : [primaryChannelId];
+    const permOverrideMap = new Map();
+    // Helper counts for targets (used to decide if footnote should show differences)
+    const totalRoleSelected = finalTargets.filter(t => interaction.guild.roles.cache.has(t)).length;
+    const totalUserSelected = finalTargets.filter(t => !interaction.guild.roles.cache.has(t)).length;
+    let anyChangeMade = false;
+    for (const chId of channelsToApply) {
+        const ch = await interaction.guild.channels.fetch(chId).catch(() => null);
+        if (!ch)
+            continue;
+        for (const targetId of finalTargets) {
+            const currentOverwrites = ch.permissionOverwrites.cache.get(targetId);
             const currentAllow = currentOverwrites?.allow?.bitfield ?? 0n;
             const currentDeny = currentOverwrites?.deny?.bitfield ?? 0n;
-            totalAllowedChanges |= (currentAllow ^ finalAllow.bitfield) & finalAllow.bitfield;
-            totalDeniedChanges |= (currentDeny ^ finalDeny.bitfield) & finalDeny.bitfield;
-            totalInheritedChanges |= (currentAllow & inheritBits) | (currentDeny & inheritBits);
-            if (interaction.guild.roles.cache.has(id))
-                roleIds.push(id);
-            else
-                userIds.push(id);
-        }
-        // Build summary message components
-        const comps = [];
-        comps.push({ type: 10, content: `## <#${channel.id}>` });
-        if (userIds.length > 0) {
-            let userMentionStr = `<@${userIds[0]}>`;
-            if (userIds.length > 1)
-                userMentionStr += ` +${userIds.length - 1} Member${userIds.length > 2 ? 's' : ''}`;
-            comps.push({ type: 10, content: userMentionStr });
-        }
-        if (roleIds.length > 0) {
-            let roleMentionStr = `<@&${roleIds[0]}>`;
-            if (roleIds.length > 1)
-                roleMentionStr += ` +${roleIds.length - 1} Role${roleIds.length > 2 ? 's' : ''}`;
-            comps.push({ type: 10, content: roleMentionStr });
-        }
-        const allowedPermNames = channelPermissions.filter(p => (totalAllowedChanges & BigInt(p.value)) !== 0n).map(p => p.name);
-        const deniedPermNames = channelPermissions.filter(p => (totalDeniedChanges & BigInt(p.value)) !== 0n).map(p => p.name);
-        const inheritedPermNames = channelPermissions.filter(p => (totalInheritedChanges & BigInt(p.value)) !== 0n).map(p => p.name);
-        const permsChanged = allowedPermNames.length > 0 || deniedPermNames.length > 0 || inheritedPermNames.length > 0;
-        if (permsChanged) {
-            comps.push({ type: 14, spacing: 1 });
-            if (allowedPermNames.length > 0)
-                comps.push({ type: 10, content: allowedPermNames.map(name => `<:Check_Coloured:1406896084168609824> ${name}`).join('\n') });
-            if (inheritedPermNames.length > 0) {
-                if (allowedPermNames.length > 0)
-                    comps.push({ type: 14, divider: false });
-                comps.push({ type: 10, content: inheritedPermNames.map(name => `<:Slash_Coloured:1406896106117533758> ${name}`).join('\n') });
+            for (const key of unionKeys) {
+                const bit = permKeyToValue[key] ?? 0n;
+                if (bit === 0n)
+                    continue; // skip unknown mapping
+                const currentValue = (currentAllow & bit) !== 0n ? 'allow' : (currentDeny & bit) !== 0n ? 'deny' : 'inherit';
+                const desiredRaw = overwriteOptions[key];
+                const desiredValue = desiredRaw === null ? 'inherit' : desiredRaw === false ? 'deny' : 'allow';
+                if (currentValue !== desiredValue) {
+                    anyChangeMade = true;
+                    let grouping = permOverrideMap.get(key);
+                    if (!grouping) {
+                        grouping = { channels: new Set(), users: new Set(), roles: new Set() };
+                        permOverrideMap.set(key, grouping);
+                    }
+                    grouping.channels.add(chId);
+                    if (interaction.guild.roles.cache.has(targetId))
+                        grouping.roles.add(targetId);
+                    else
+                        grouping.users.add(targetId);
+                }
             }
-            if (deniedPermNames.length > 0) {
-                if (allowedPermNames.length > 0 || inheritedPermNames.length > 0)
-                    comps.push({ type: 14, divider: false });
-                comps.push({ type: 10, content: deniedPermNames.map(name => `<:X_Coloured:1406896126187016284> ${name}`).join('\n') });
-            }
-            comps.push({ type: 14, spacing: 2 });
-            comps.push({ type: 10, content: '-# *Permissions shown above only display registered changes*' });
-        }
-        else {
-            comps.push({ type: 10, content: '\nNo permission changes were applied as the selected overwrites were already in place.' });
-        }
-        const container = { type: 17, components: comps };
-        await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
-    }
-    catch (err) {
-        console.error('[channel] unexpected error processing modal:', err);
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '<:Cross:1425291759952593066> An unexpected error occurred while applying permissions.', flags: MessageFlags.Ephemeral });
-        }
-        else {
             try {
-                await interaction.followUp({ content: '<:Cross:1425291759952593066> An unexpected error occurred while applying permissions.', flags: MessageFlags.Ephemeral });
+                await ch.permissionOverwrites.edit(targetId, overwriteOptions, { reason: auditLogReason });
             }
-            catch (_) { /* ignore */ }
+            catch { }
         }
+    }
+    if (!anyChangeMade) {
+        const comps = [];
+        comps.push({ type: 10, content: `## <#${primaryChannel.id}>` });
+        if (channelsToApply.length > 1) {
+            const extraChannels = channelsToApply.length - 1;
+            comps.push({ type: 10, content: `-# +${extraChannels} ${extraChannels === 1 ? 'channel' : 'channels'}` });
+        }
+        comps.push({ type: 14, spacing: 1 });
+        comps.push({ type: 10, content: 'No permission changes were applied as the selected overwrites were already in place.' });
+        const container = { type: 17, components: comps };
+        await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+        return;
+    }
+    const buildLines = (keys, icon) => {
+        return keys.map(k => {
+            const friendly = permKeyToFriendly[k] ?? k;
+            const grouping = permOverrideMap.get(k);
+            let foot;
+            if (grouping) {
+                const appliedToAllChannels = grouping.channels.size === channelsToApply.length;
+                const appliedToAllRoles = totalRoleSelected === 0 || grouping.roles.size === totalRoleSelected;
+                const appliedToAllUsers = totalUserSelected === 0 || grouping.users.size === totalUserSelected;
+                const wasUniversal = appliedToAllChannels && appliedToAllRoles && appliedToAllUsers;
+                // The footnote should only be displayed if the permission overwrite was not applied universally
+                // to all targeted channels and members/roles. This provides clarity on partial updates.
+                if (!wasUniversal) {
+                    const parts = [];
+                    if (grouping.channels.size > 0) {
+                        parts.push(Array.from(grouping.channels).map(cid => `<#${cid}>`).join(', '));
+                    }
+                    if (grouping.users.size > 0 && !appliedToAllUsers) {
+                        parts.push(Array.from(grouping.users).map(uid => `<@${uid}>`).join(', '));
+                    }
+                    if (grouping.roles.size > 0 && !appliedToAllRoles) {
+                        parts.push(Array.from(grouping.roles).map(rid => `<@&${rid}>`).join(', '));
+                    }
+                    if (parts.length > 0)
+                        foot = `-# Overrides: ${parts.join('; ')}`;
+                }
+            }
+            return `${icon} ${friendly}${foot ? `\n${foot}` : ''}`;
+        });
+    };
+    const allowedKeys = Array.from(unionKeys).filter(k => overwriteOptions[k] === true && permOverrideMap.has(k));
+    const deniedKeys = Array.from(unionKeys).filter(k => overwriteOptions[k] === false && permOverrideMap.has(k));
+    const inheritedKeys = Array.from(unionKeys).filter(k => overwriteOptions[k] === null && permOverrideMap.has(k));
+    const allowedLines = buildLines(allowedKeys, '<:Check_Coloured:1406896084168609824>');
+    const inheritedLines = buildLines(inheritedKeys, '<:Slash_Coloured:1406896106117533758>');
+    const deniedLines = buildLines(deniedKeys, '<:X_Coloured:1406896126187016284>');
+    const allowedContent = allowedLines.length > 0 ? allowedLines.join('\n') : '';
+    const inheritedContent = inheritedLines.length > 0 ? inheritedLines.join('\n') : '';
+    const deniedContent = deniedLines.length > 0 ? deniedLines.join('\n') : '';
+    const combinedLength = allowedContent.length + inheritedContent.length + deniedContent.length;
+    const needSelect = combinedLength > 3800;
+    const comps = [
+        { type: 10, content: `## <#${primaryChannel.id}>` },
+        ...(channelsToApply.length > 1 ? [{ type: 10, content: `-# +${channelsToApply.length - 1} more channels` }] : []),
+        { type: 14, spacing: 1 }
+    ];
+    if (!needSelect) {
+        if (allowedContent)
+            comps.push({ type: 10, content: allowedContent });
+        if (inheritedContent)
+            comps.push({ type: 14, divider: false }, { type: 10, content: inheritedContent });
+        if (deniedContent)
+            comps.push({ type: 14, divider: false }, { type: 10, content: deniedContent });
+        comps.push({ type: 14, spacing: 2 }, { type: 10, content: '-# *Permissions shown above only display registered changes*' });
+        const container = { type: 17, components: comps };
+        await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+    }
+    else {
+        let initialView = 'allowed';
+        if (!allowedContent)
+            initialView = inheritedContent ? 'inherited' : 'denied';
+        const buildSelectAndContent = (currentView) => {
+            const select = new StringSelectMenuBuilder()
+                .setCustomId(`channel_perms_view:${primaryChannel.id}:${Date.now()}`)
+                .setPlaceholder('Choose which permission view to show')
+                .addOptions(...(allowedContent ? [{ label: 'Allowed', value: 'allowed', default: currentView === 'allowed', emoji: { id: '1406896084168609824' } }] : []), ...(inheritedContent ? [{ label: 'Inherited', value: 'inherited', default: currentView === 'inherited', emoji: { id: '1406896106117533758' } }] : []), ...(deniedContent ? [{ label: 'Denied', value: 'denied', default: currentView === 'denied', emoji: { id: '1406896126187016284' } }] : []));
+            const contentMap = { allowed: allowedContent, inherited: inheritedContent, denied: deniedContent };
+            const currentContent = contentMap[currentView];
+            const currentComps = [...comps,
+                { type: 10, content: currentContent },
+                { type: 14, spacing: 1 },
+                { type: 1, components: [select.toJSON()] },
+                { type: 14, spacing: 2 },
+                { type: 10, content: '-# *Permissions shown above only display registered changes*' }
+            ];
+            return { type: 17, components: currentComps };
+        };
+        const container = buildSelectAndContent(initialView);
+        const replyMsg = await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+        const collector = replyMsg.createMessageComponentCollector({
+            componentType: ComponentType.StringSelect,
+            time: 300_000,
+            filter: i => i.user.id === interaction.user.id
+        });
+        collector.on('collect', async (i) => {
+            const selectedView = i.values[0];
+            const updatedContainer = buildSelectAndContent(selectedView);
+            await i.update({ components: [updatedContainer], flags: MessageFlags.IsComponentsV2 });
+        });
+        collector.on('end', async () => {
+            try {
+                const finalMsg = await interaction.fetchReply();
+                const disabledComps = finalMsg.components.map(row => {
+                    if (row.type === ComponentType.ActionRow) {
+                        const newRow = new ActionRowBuilder();
+                        row.components.forEach(comp => {
+                            if (comp.type === ComponentType.StringSelect) {
+                                newRow.addComponents(StringSelectMenuBuilder.from(comp).setDisabled(true));
+                            }
+                        });
+                        return newRow;
+                    }
+                    return row;
+                });
+                await interaction.editReply({ components: disabledComps.map(c => 'toJSON' in c ? c.toJSON() : c) });
+            }
+            catch { }
+        });
     }
 }

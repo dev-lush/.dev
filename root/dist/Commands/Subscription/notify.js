@@ -89,7 +89,7 @@ async function showPreviewsCategorySelector(interaction, subId) {
  */
 async function showStatusImpactSelector(interaction, subId) {
     const container = [
-        { type: 10, content: '# <:Discord_Status:1427642694183817369> Discord Status\n##Mention by Impact\nSelect roles to mention for each incident impact level.' },
+        { type: 10, content: '# <:Discord_Status:1430905087127191674> Discord Status\n##Mention by Impact\nSelect roles to mention for each incident impact level.' },
         { type: 14, spacing: 2 }
     ];
     for (let i = 0; i < STATUS_IMPACTS.length; i++) {
@@ -188,7 +188,7 @@ export default {
         }
         else if (subType === 'status') {
             const container = [
-                { type: 10, content: '# <:Discord_Status:1427642694183817369> Discord Status\nConfigure role mentions for Discord Status updates.' },
+                { type: 10, content: '# <:Discord_Status:1430905087127191674> Discord Status\nConfigure role mentions for Discord Status updates.' },
                 { type: 14, spacing: 2 },
                 { type: 10, content: '## Universal Mention\nThis role will be mentioned for all incidents and maintenances.' },
                 { type: 1, components: [new RoleSelectMenuBuilder().setCustomId(`status_setrole_${subId}_universal`).setPlaceholder('Select a universal role').setMaxValues(1).toJSON()] },

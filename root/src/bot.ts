@@ -21,6 +21,7 @@ import { warnMissingPerms } from './System Messages/System/permissionNotifier.js
 import { preloadFonts } from './Assets/fonts.js'; 
 import { handleAssetButton } from './Utils/interactionHandlers.js';
 import { handleChannelPermsModal } from './Commands/Management/channel.js';
+import PollGate from './Utils/pollGate.js';
 
 const { DISCORD_TOKEN, MONGODB_URI, CLIENT_ID, PORT } = process.env;
 
@@ -177,7 +178,7 @@ async function startBot() {
     }
     
     // Start all background polling tasks.
-    startPolling(client);
+    await startPolling(client);
   });
 
   // Handle incoming command and autocomplete interactions.
@@ -281,10 +282,13 @@ async function startBot() {
  * Starts all periodic polling tasks for the bot.
  * @param client The authenticated Discord client instance.
  */
-function startPolling(client: MyClient) {
+async function startPolling(client: MyClient) {
   // Poll for new GitHub commit comments every 15 seconds.
   const pollCommits = async () => {
     try {
+      if (PollGate.isAppModeActive && PollGate.isAppModeActive()) {
+        return;
+      }
       await checkNewCommitComments(client);
     } catch (err) {
       console.error('❌ Error polling commit comments:', err);
@@ -352,6 +356,30 @@ function startPolling(client: MyClient) {
       console.error('❌ Error during periodic permission check:', err);
     }
   }, 60 * 60 * 1000);
+
+  // Initialize the smart polling controller for commits.
+  // The controller decides whether to run continuous polling (if GitHub App not installed)
+  // or to rely on webhooks (if the App is installed), and it can enable temporary polling
+  // on transient failures.
+  try {
+    await PollGate.init(client, async (c) => {
+      try {
+        await checkNewCommitComments(c);
+      } catch (err) {
+        console.error('❌ Error during commit poll (controller):', err);
+        throw err;
+      }
+      return 0;
+    });
+  } catch (err) {
+    console.warn('[bot] PollGate.init failed, falling back to immediate poll + continuous interval.');
+    // fallback: run one immediate poll and continue to start a basic setInterval so bot remains functional
+    const fallbackPoll = async () => {
+      try { await checkNewCommitComments(client); } catch (e) { console.error('[bot] fallback poll error:', e); }
+    };
+    fallbackPoll();
+    setInterval(fallbackPoll, 15_000);
+  }
 }
 
 // Start the application and catch any fatal errors during initialization.

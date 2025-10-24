@@ -158,7 +158,7 @@ export async function fetchActiveIncidents() {
 export function buildStatusContainer(incident, forceOriginalColor = false) {
     const blocks = [];
     const isMaintenance = !!incident.scheduled_for || incident.name.toLowerCase().includes('maintenance');
-    let headerContent = `# <:Discord_Status:1427642694183817369> Discord Status\n${incident.name}`;
+    let headerContent = `# <:Discord_Status:1430905087127191674> Discord Status\n${incident.name}`;
     // Consolidate all affected components from the incident and its updates
     const allComponents = new Set();
     if (incident.affected_components) {

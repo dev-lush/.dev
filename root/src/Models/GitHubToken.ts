@@ -1,6 +1,8 @@
 import mongoose, { Schema, Document, model } from 'mongoose';
 import dotenv from 'dotenv';
 import fetch, { RequestInit, Response } from 'node-fetch';
+import { fetchAsApp } from '../Services/GitHubApp.js';
+import PollGate from '../Utils/pollGate.js';
 
 /**
  * Represents an error that occurred during a GitHub API request.
@@ -170,6 +172,29 @@ export async function getGitHubHeaders(): Promise<Record<string, string>> {
 }
 
 /**
+ * Try to derive owner/repo from a GitHub API URL.
+ * Matches URLs like: https://api.github.com/repos/owner/repo/...
+ */
+function extractOwnerRepoFromUrl(url: string): { owner: string; repo: string } | null {
+    try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(Boolean);
+        // path like: /repos/:owner/:repo/...
+        const repoIndex = parts.indexOf('repos');
+        if (repoIndex >= 0 && parts.length > repoIndex + 2) {
+            return { owner: parts[repoIndex + 1], repo: parts[repoIndex + 2] };
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function isAttachmentUrl(url: string): boolean {
+    return url.includes('/download/') || url.includes('/raw/');
+}
+
+/**
  * A robust wrapper around `node-fetch` for making authenticated GitHub API requests.
  * It automatically handles token selection, rotation, rate limit tracking, request retries
  * on network errors or rate limits, and deactivation of invalid tokens. It also correctly
@@ -185,14 +210,27 @@ export async function fetchWithToken(url: string, init?: RequestInit, usePreview
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         const token = await getAvailableToken();
+        
         if (!token) {
-            throw new Error('No GitHub tokens available');
+            // --- START: GitHub App Fallback Logic ---
+            console.warn('[fetchWithToken] No personal tokens available. Attempting GitHub App fallback.');
+            try {
+                const repoInfo = extractOwnerRepoFromUrl(url);
+                if (repoInfo) {
+                    const { owner, repo } = repoInfo;
+                    const acceptPreview = usePreview ? 'application/vnd.github.full+json' : undefined;
+                    return await fetchAsApp(url, init, { owner, repo, acceptPreview });
+                } else {
+                    console.warn(`[fetchWithToken] Could not determine repository from URL for App fallback: ${url}`);
+                }
+            } catch (appError) {
+                console.error('[fetchWithToken] GitHub App fallback failed:', appError);
+            }
+            // --- END: GitHub App Fallback Logic ---
+            throw new Error('No GitHub tokens available and GitHub App fallback failed or was not applicable.');
         }
 
-        const baseHeaders: Record<string, string> = {
-            'Authorization': `token ${token.token}`
-        };
-
+        const baseHeaders: Record<string, string> = { 'Authorization': `token ${token.token}` };
         const headers = { ...(init?.headers as Record<string, string>) };
 
         if (!headers['Accept']) {
@@ -205,9 +243,7 @@ export async function fetchWithToken(url: string, init?: RequestInit, usePreview
             }
         }
 
-        let finalHeaders = { ...headers }; // Initialize finalHeaders with the provided headers
-
-        // Conditionally add Authorization header
+        let finalHeaders = { ...headers };
         if (!url.includes('user-images.githubusercontent.com')) {
             finalHeaders = { ...baseHeaders, ...headers };
         }
@@ -233,7 +269,6 @@ export async function fetchWithToken(url: string, init?: RequestInit, usePreview
 
             if (!response.ok && response.status !== 302 && response.status !== 304) {
                 const body = await response.text().catch(() => 'No response body');
-                // Don't log the full body for 403, as it's noisy and expected when a token is exhausted.
                 if (response.status !== 403) {
                     console.error(`GitHub API error (${url}):`, { status: response.status, statusText: response.statusText, body });
                 }
@@ -242,43 +277,31 @@ export async function fetchWithToken(url: string, init?: RequestInit, usePreview
 
             return response;
         } catch (error: any) {
-            // Deactivate token on invalid credentials and retry
             if (error instanceof GitHubApiError && error.status === 401) {
                 console.warn(`[fetchWithToken] Token ending in ...${token.token.slice(-4)} is invalid. Deactivating it and retrying.`);
                 await deactivateToken(token.token);
-                if (attempt < MAX_RETRIES) {
-                    continue;
-                }
+                if (attempt < MAX_RETRIES) continue;
             }
-            // Handle rate limit error (403) by retrying with another token without deactivating.
-            // The token's rate limit status was already updated by `updateTokenStatus` before the error was thrown.
             else if (error instanceof GitHubApiError && error.status === 403) {
                 console.warn(`[fetchWithToken] Token ending in ...${token.token.slice(-4)} was rate-limited. Retrying with another token.`);
-                if (attempt < MAX_RETRIES) {
-                    continue; // Continue to the next attempt in the loop to get a new token
-                }
+                if (attempt < MAX_RETRIES) continue;
             }
 
-            // Retry on specific network errors
             if (attempt < MAX_RETRIES && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(error.code)) {
                 console.warn(`Attempt ${attempt} failed for ${url} with ${error.code}. Retrying in ${RETRY_DELAY / 1000}s...`);
                 await new Promise(res => setTimeout(res, RETRY_DELAY * attempt));
                 continue;
             }
             
-            // For all other errors, or if retries are exhausted, fail.
+            try {
+                PollGate.handleTransientError(error);
+            } catch (e) {
+                console.warn('[GitHubToken] Failed to notify PollGate about transient error:', e);
+            }
+
             console.error(`Failed to fetch ${url} after ${attempt} attempts:`, error);
             throw error;
         }
     }
     throw new Error(`Failed to fetch ${url} after ${MAX_RETRIES} retries.`);
-}
-
-/**
- * Checks if a URL points to a GitHub attachment that requires special handling.
- * @param url The URL to check.
- * @returns True if the URL is for an attachment download.
- */
-function isAttachmentUrl(url: string): boolean {
-    return url.includes('/download/') || url.includes('/raw/');
 }
