@@ -527,13 +527,13 @@ export function parseSections(body: string): Section[] {
  * dispatches them to subscribed channels.
  * @param client The Discord client instance.
  */
-export async function checkNewCommitComments(client: Client) {
+export async function checkNewCommitComments(client: Client): Promise<number> {
   if (!await isTokenLoaded()) {
     if (Date.now() - lastRateLimitWarn > 60000) {
       console.warn('[commitMessage] Skipping polling: No active GitHub tokens available');
       lastRateLimitWarn = Date.now();
     }
-    return;
+    return 0;
   }
 
   try {
@@ -545,7 +545,6 @@ export async function checkNewCommitComments(client: Client) {
       try {
         let startCommentId = 0;
         const pickMaxId = (ids: number[]) => ids.reduce((m, v) => (v > m ? v : m), 0);
-
         // Scan recent events
         try {
           const EVENT_PAGES = 3;
@@ -594,11 +593,11 @@ export async function checkNewCommitComments(client: Client) {
           console.error('[init-checkpoint] Failed to create initial checkpoint:', error);
         }
       }
-      return; // Exit to start fresh on the next poll
+      return 0; // Exit to start fresh on the next poll
     }
 
-    // 2. Collect new comments from multiple sources to ensure reliability
-    const allComments = new Map<number, GitHubComment>();
+   // 2. Collect new comments from multiple sources to ensure reliability
+   const allComments = new Map<number, GitHubComment>();
 
     // --- Strategy 1: Fetch recent commits (Primary, deep scan) ---
     try {
@@ -610,8 +609,7 @@ export async function checkNewCommitComments(client: Client) {
       if (commitsRes.ok) {
         const recentCommits = await commitsRes.json() as GitHubCommit[];
         for (const commit of recentCommits) {
-          try {
-            const commentsOnCommitRes = await fetchWithToken(
+          try {            const commentsOnCommitRes = await fetchWithToken(
               `https://api.github.com/repos/Discord-Datamining/Discord-Datamining/commits/${commit.sha}/comments`,
               undefined, true
             );
@@ -678,7 +676,7 @@ export async function checkNewCommitComments(client: Client) {
     const newComments = Array.from(allComments.values()).sort((a, b) => a.id - b.id);
     if (newComments.length === 0) {
       if (isFirstPoll) isFirstPoll = false;
-      return;
+      return 0;
     }
 
     console.log(`[polling] Found ${newComments.length} new commit comments to process from combined strategies.`);
@@ -765,9 +763,10 @@ export async function checkNewCommitComments(client: Client) {
       await CommitCommentCheckpoint.findByIdAndUpdate('global', { $set: { lastProcessedCommentId: lastSuccessfullyProcessedId } })
         .catch(err => console.error('[polling] Failed to persist final batch checkpoint update:', err));
     }
-
+    return newComments.length;
   } catch (error) {
     console.error('Failed to check new commit comments:', error);
+    return 0;
   }
 }
 
