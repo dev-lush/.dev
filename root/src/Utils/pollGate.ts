@@ -180,7 +180,11 @@ class StatusUpdateGate {
     private pollingInterval?: NodeJS.Timeout;
     private isPolling = false;
     private readonly POLLING_INTERVAL_MS = 60_000;
-    private readonly WEBHOOK_HEALTH_THRESHOLD_MS = 5 * 60_000; // 5 minutes
+    // Prefer error-driven fallback. Keep silence threshold high so we don't
+    // assume webhook failure just because incidents are infrequent.
+    private readonly WEBHOOK_HEALTH_THRESHOLD_MS = 60 * 60_000; // 60 minutes
+    private temporaryTimeout?: NodeJS.Timeout | null = null;
+    private readonly TEMP_POLL_MAX_DURATION_MS = 15 * 60_000; // 15 minutes safety cap
 
     init(client: Client, pollFn: StatusPollFn) {
         this.client = client;
@@ -201,8 +205,10 @@ class StatusUpdateGate {
     private checkWebhookHealth() {
         if (this.isPolling) return;
         const timeSinceLastWebhook = Date.now() - this.lastWebhookTimestamp;
-        if (timeSinceLastWebhook > this.WEBHOOK_HEALTH_THRESHOLD_MS) {
-            console.warn(`[StatusGate] No status webhook received in over ${this.WEBHOOK_HEALTH_THRESHOLD_MS / 60000} minutes. Falling back to polling.`);
+        // Only fall back automatically if we've never seen a webhook (bootstrapping)
+        // or if a very long silence has elapsed. Otherwise prefer error-driven fallback.
+        if (this.lastWebhookTimestamp === 0 || timeSinceLastWebhook > this.WEBHOOK_HEALTH_THRESHOLD_MS) {
+            console.warn(`[StatusGate] No status webhook received in over ${Math.round(this.WEBHOOK_HEALTH_THRESHOLD_MS / 60000)} minutes. Falling back to polling.`);
             this.startPolling();
         }
     }
@@ -233,14 +239,43 @@ class StatusUpdateGate {
      */
     enableTemporaryPolling() {
         try {
-            if (!this.isPolling) {
-                console.warn('[StatusGate] enableTemporaryPolling called - starting immediate polling fallback.');
-                this.startPolling();
-            } else {
-                // Already polling; nothing to do.
+            if (this.isPolling) {
+                // Already polling; reset safety timeout.
+                if (this.temporaryTimeout) {
+                    clearTimeout(this.temporaryTimeout);
+                }
+                this.temporaryTimeout = setTimeout(() => {
+                    console.warn('[StatusGate] Temporary polling safety timeout reached — stopping temporary polling.');
+                    this.stopPolling();
+                }, this.TEMP_POLL_MAX_DURATION_MS);
+                return;
             }
+
+            // Start polling immediately.
+            this.startPolling();
+
+            // Safety timeout to avoid infinite polling if webhooks never recover.
+            this.temporaryTimeout = setTimeout(() => {
+                console.warn('[StatusGate] Temporary polling safety timeout reached — stopping temporary polling.');
+                this.stopPolling();
+            }, this.TEMP_POLL_MAX_DURATION_MS);
+
+            console.log('[StatusGate] Temporary polling enabled due to processing error. Will stop when webhook resumes or after timeout.');
         } catch (err) {
             console.error('[StatusGate] enableTemporaryPolling error:', err);
+        }
+    }
+
+    /**
+     * Public helper to be called when background processing of an incoming webhook fails.
+     * This triggers the temporary polling fallback.
+     */
+    handleProcessingError(err: any) {
+        try {
+            console.warn('[StatusGate] handleProcessingError called - switching to temporary polling fallback.', err);
+            this.enableTemporaryPolling();
+        } catch (e) {
+            console.error('[StatusGate] handleProcessingError error:', e);
         }
     }
 }

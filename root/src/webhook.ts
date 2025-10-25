@@ -386,7 +386,7 @@ const handleDiscordStatusWebhook: RequestHandler = async (req, res, next) => {
                 }
             } catch (err) {
                 console.error('Error during background processing of Discord Status webhook:', err);
-                try { statusUpdateGate.enableTemporaryPolling(); } catch (e) { /* best-effort */ }
+                try { statusUpdateGate.handleProcessingError(err); } catch (e) { /* best-effort */ }
             }
         });
 

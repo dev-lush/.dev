@@ -1,4 +1,5 @@
 /**
+ * @file
  * Server Badges and Boost Icons for Discord Server Card Generator
  * Contains all SVG path definitions and rendering logic for badges and boost levels
  */
