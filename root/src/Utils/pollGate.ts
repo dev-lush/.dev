@@ -176,22 +176,17 @@ class StatusUpdateGate {
     private client?: Client;
     private pollFn?: StatusPollFn;
     private lastWebhookTimestamp = 0;
-    private healthCheckTimer?: NodeJS.Timeout;
     private pollingInterval?: NodeJS.Timeout;
     private isPolling = false;
     private readonly POLLING_INTERVAL_MS = 60_000;
-    // Prefer error-driven fallback. Keep silence threshold high so we don't
-    // assume webhook failure just because incidents are infrequent.
-    private readonly WEBHOOK_HEALTH_THRESHOLD_MS = 60 * 60_000; // 60 minutes
     private temporaryTimeout?: NodeJS.Timeout | null = null;
     private readonly TEMP_POLL_MAX_DURATION_MS = 15 * 60_000; // 15 minutes safety cap
 
     init(client: Client, pollFn: StatusPollFn) {
         this.client = client;
         this.pollFn = pollFn;
-        this.lastWebhookTimestamp = Date.now();
-        this.healthCheckTimer = setInterval(() => this.checkWebhookHealth(), this.POLLING_INTERVAL_MS);
-        console.log('[StatusGate] Initialized and watching webhook health.');
+        this.lastWebhookTimestamp = 0;
+        console.log('[StatusGate] Initialized.');
     }
 
     webhookReceived() {
@@ -199,17 +194,6 @@ class StatusUpdateGate {
         if (this.isPolling) {
             console.log('[StatusGate] Webhook signal received. Reverting to webhook-first mode.');
             this.stopPolling();
-        }
-    }
-
-    private checkWebhookHealth() {
-        if (this.isPolling) return;
-        const timeSinceLastWebhook = Date.now() - this.lastWebhookTimestamp;
-        // Only fall back automatically if we've never seen a webhook (bootstrapping)
-        // or if a very long silence has elapsed. Otherwise prefer error-driven fallback.
-        if (this.lastWebhookTimestamp === 0 || timeSinceLastWebhook > this.WEBHOOK_HEALTH_THRESHOLD_MS) {
-            console.warn(`[StatusGate] No status webhook received in over ${Math.round(this.WEBHOOK_HEALTH_THRESHOLD_MS / 60000)} minutes. Falling back to polling.`);
-            this.startPolling();
         }
     }
 
@@ -232,15 +216,9 @@ class StatusUpdateGate {
         console.log('[StatusGate] Stopped polling for Discord Status updates.');
     }
 
-    /**
-     * Public API to force the status gate into polling mode.
-     * Useful when the webhook was received but processing failed and
-     * we want to immediately fallback to polling until the webhook flow recovers.
-     */
     enableTemporaryPolling() {
         try {
             if (this.isPolling) {
-                // Already polling; reset safety timeout.
                 if (this.temporaryTimeout) {
                     clearTimeout(this.temporaryTimeout);
                 }
@@ -251,10 +229,8 @@ class StatusUpdateGate {
                 return;
             }
 
-            // Start polling immediately.
             this.startPolling();
 
-            // Safety timeout to avoid infinite polling if webhooks never recover.
             this.temporaryTimeout = setTimeout(() => {
                 console.warn('[StatusGate] Temporary polling safety timeout reached — stopping temporary polling.');
                 this.stopPolling();
