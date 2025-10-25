@@ -1,6 +1,7 @@
 import {
     SlashCommandBuilder, ChannelType, ChatInputCommandInteraction, PermissionFlagsBits, MessageFlags,
     TextChannel, NewsChannel, VoiceChannel, StageChannel, ThreadChannel,
+    ApplicationIntegrationType, InteractionContextType
 } from 'discord.js';
 import { commandGuard } from '../../Utils/commandGuard.js';
 import { parseDuration, formatDuration } from '../../Utils/time.js';
@@ -19,6 +20,8 @@ export default {
     data: new SlashCommandBuilder()
         .setName('slowmode')
         .setDescription('Sets or removes the slowmode in a channel or thread.')
+        .setIntegrationTypes([ ApplicationIntegrationType.GuildInstall ])
+        .setContexts([ InteractionContextType.Guild ])
         .addStringOption(option =>
             option.setName('duration')
             .setDescription('Duration of the slowmode (e.g., "10s", "5m", "1h"). Set to 0 to remove.')

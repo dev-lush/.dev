@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, GuildMember, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, GuildMember, MessageFlags, InteractionContextType, ApplicationIntegrationType } from 'discord.js';
 import { commandGuard } from '../../Utils/commandGuard.js';
 import { parseDuration, formatDuration, getFutureDate, formatDiscordTimestamps } from '../../Utils/time.js';
 import { buildAuditLogReasonPlain } from '../../Utils/auditLog.js';
@@ -9,6 +9,8 @@ export default {
     data: new SlashCommandBuilder()
         .setName('timeout')
         .setDescription('Times out a member for a specified duration.')
+        .setIntegrationTypes([ ApplicationIntegrationType.GuildInstall ])
+        .setContexts([ InteractionContextType.Guild ])
         .addUserOption(option =>
             option.setName('user')
             .setDescription('The user to time out.')
