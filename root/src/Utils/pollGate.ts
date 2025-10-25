@@ -8,89 +8,36 @@ import { getInstallationIdForRepo } from '../Services/GitHubApp.js';
  * @param client The client instance to use for the polling action.
  * @returns A promise that resolves when the polling action is complete.
  */
-type PollFn = (client: Client) => Promise<number>;
+type GitHubPollFn = (client: Client) => Promise<number>;
 
 /**
- * Manages polling for a GitHub repository, acting as an intelligent gatekeeper to
- * switch between webhook-driven updates and active polling.
- *
- * The primary goal of PollGate is to minimize unnecessary API calls by relying on
- * webhooks from an installed GitHub App whenever possible. It dynamically switches
- * between two main states:
- *
- * 1.  **App Mode (Webhook-First)**: When the GitHub App is detected as installed in the
- *     target repository (`appModeActive = true`), continuous polling is stopped. The system
- *     assumes that updates will be received via webhooks. This is the preferred,
- *     efficient mode.
- *
- * 2.  **Continuous Polling Mode**: If the GitHub App is not installed, PollGate falls
- *     back to polling the repository at a regular interval to check for new commits.
- *
- * The class periodically re-evaluates the app's installation status to automatically
- * transition between these modes.
- *
- * @remarks
- * In addition to the two main modes, PollGate implements a **Temporary Polling**
- * mechanism. This is a short-term, frequent polling state that is activated as a
- * safety net under specific conditions, such as:
- * - After a transient network error occurs during a GitHub API call.
- * - If a manually requested poll fails.
- * - If the initial check for the GitHub App installation fails.
- *
- * This temporary polling ensures that no events are missed if a webhook fails to
- * deliver or during periods of network instability. After a configurable duration,
- * temporary polling ceases, and the system re-evaluates the app installation to
- * return to the appropriate long-term mode.
+ * Manages polling for the Discord-Datamining GitHub repository, acting as an
+ * intelligent gatekeeper to switch between webhook-driven updates and active polling.
  */
-class PollGate extends EventEmitter {
+class GitHubUpdateGate extends EventEmitter {
     private client?: Client;
-    private pollFn?: PollFn;
+    private pollFn?: GitHubPollFn;
     private continuousInterval?: NodeJS.Timeout | null = null;
     private temporaryInterval?: NodeJS.Timeout | null = null;
     private temporaryTimeout?: NodeJS.Timeout | null = null;
+    private consecutiveEmptyPolls = 0;
     private appModeActive = false; // true => rely on webhooks (App installed)
     private readonly repoOwner = 'Discord-Datamining';
     private readonly repoName = 'Discord-Datamining';
     private readonly POLL_INTERVAL_MS = 15_000;
-    private readonly TEMP_POLL_DURATION_MS = 5 * 60_1000; // 5 minutes
-    private readonly RECHECK_APP_MS = 10 * 60_1000; // re-check installation every 10 minutes
+    private readonly TEMP_POLL_MAX_DURATION_MS = 15 * 60_000; // 15 minutes safety cap
+    private readonly RECHECK_APP_MS = 10 * 60_000;
     private recheckTimer?: NodeJS.Timeout | null = null;
 
-    /**
-     * Initializes the polling controller.
-     *
-     * This method stores the client and the polling function, performs an initial
-     * evaluation of the application's mode, and then starts a periodic timer
-     * to re-evaluate the mode at a fixed interval.
-     *
-     * @param client - The main client instance.
-     * @param pollFn - The function to execute when polling is active.
-     * @returns A promise that resolves once the initial evaluation is complete.
-     */
-    async init(client: Client, pollFn: PollFn) {
+    async init(client: Client, pollFn: GitHubPollFn) {
         this.client = client;
         this.pollFn = pollFn;
-
         await this.evaluateAppMode();
-
-        // start periodic re-check of installation state
-            this.recheckTimer = setInterval(() => this.evaluateAppMode().catch(err => {
-            console.warn('[PollGate] failed to re-evaluate app installation:', err);
+        this.recheckTimer = setInterval(() => this.evaluateAppMode().catch(err => {
+            console.warn('[GitHubGate] Failed to re-evaluate app installation:', err);
         }), this.RECHECK_APP_MS);
     }
 
-    /**
-     * Evaluates the GitHub App installation status for the repository and adjusts the polling strategy.
-     *
-     * This method checks if the GitHub App is installed for the configured repository.
-     * - If the app is installed, it activates `appModeActive`, stops continuous polling, and relies on webhooks.
-     * - If the app is not installed (or was uninstalled), it deactivates `appModeActive` and falls back to continuous polling.
-     * - On startup, if the app is not installed, it initiates continuous polling.
-     * - If an error occurs during the check, it enables temporary polling as a fail-safe mechanism to ensure
-     *   data freshness.
-     * @private
-     * @async
-     */
     private async evaluateAppMode() {
         try {
             const id = await getInstallationIdForRepo(this.repoOwner, this.repoName);
@@ -98,143 +45,99 @@ class PollGate extends EventEmitter {
             if (installed && !this.appModeActive) {
                 this.appModeActive = true;
                 this.stopContinuousPolling();
-                console.log('[PollGate] GitHub App detected — entering webhook-first mode (polling paused).');
+                console.log('[GitHubGate] GitHub App detected — entering webhook-first mode (polling paused).');
             } else if (!installed && this.appModeActive) {
                 this.appModeActive = false;
-                console.log('[PollGate] GitHub App not found — falling back to continuous polling.');
+                console.log('[GitHubGate] GitHub App not found — falling back to continuous polling.');
                 this.startContinuousPolling();
             } else if (!installed && !this.continuousInterval) {
-                // startup case where app not installed
                 this.startContinuousPolling();
-            } else {
-            // no state change
             }
         } catch (err) {
-            console.warn('[PollGate] Could not determine GitHub App installation:', err);
-            // If we can't check installation, be conservative: enable temporary polling
-            this.enableTemporaryPolling(this.TEMP_POLL_DURATION_MS);
+            console.warn('[GitHubGate] Could not determine GitHub App installation:', err);
+            this.enableTemporaryPolling();
         }
     }
 
-    /**
-     * Starts the continuous polling mechanism.
-     *
-     * This method initiates a regular polling cycle. It first checks if a polling
-     * function (`pollFn`) and a client instance (`client`) are available, and ensures
-     * that polling is not already active by checking for an existing `continuousInterval`.
-     *
-     * It executes the polling function immediately once upon starting. After the initial
-     * run, it sets up an interval to call the polling function repeatedly at a fixed
-     * rate defined by `POLL_INTERVAL_MS`.
-     *
-     * Errors during both the initial and subsequent polls are caught and logged to the console.
-     * The interval ID is stored in `this.continuousInterval`, which is also used to
-     * prevent multiple polling loops from running simultaneously.
-     * @private
-     */
     private startContinuousPolling() {
-            if (!this.pollFn || !this.client) return;
-            if (this.continuousInterval) return; // already running
-            // run first immediately
-            this.pollFn(this.client).catch(err => {
-            console.error('[PollGate] initial poll failed:', err);
-        });
+        if (!this.pollFn || !this.client || this.continuousInterval) return;
+        this.pollFn(this.client).catch(err => console.error('[GitHubGate] Initial poll failed:', err));
         this.continuousInterval = setInterval(() => {
             if (!this.pollFn || !this.client) return;
-            this.pollFn(this.client).catch(err => {
-                console.error('[PollGate] continuous poll error:', err);
-                // On transient errors, enable temporary polling (already running) or leave for handleTransientError
-            });
+            this.pollFn(this.client).catch(err => console.error('[GitHubGate] Continuous poll error:', err));
         }, this.POLL_INTERVAL_MS);
-        console.log('[PollGate] Continuous commit polling started.');
+        console.log('[GitHubGate] Continuous commit polling started.');
     }
 
-    /**
-     * Stops the continuous polling process.
-     *
-     * This method checks if a continuous polling interval is active. If so,
-     * it clears the interval timer to halt the periodic execution and resets the
-     * interval property to null. A confirmation message is logged to the console.
-     * @private
-     */
     private stopContinuousPolling() {
         if (this.continuousInterval) {
             clearInterval(this.continuousInterval);
             this.continuousInterval = null;
-            console.log('[PollGate] Continuous commit polling stopped.');
+            console.log('[GitHubGate] Continuous commit polling stopped.');
         }
     }
 
-    /**
-     * Request an immediate, one-off poll. Returns when poll completes (or rejects).
-     */
     async requestImmediatePoll(): Promise<number> {
         if (!this.pollFn || !this.client) return 0;
         try {
-            const processed = await this.pollFn(this.client);
-            return processed;
+            return await this.pollFn(this.client);
         } catch (err) {
-            // propagate error but also trigger fallback behaviour
-            console.error('[PollGate] immediate poll failed:', err);
+            console.error('[GitHubGate] Immediate poll failed:', err);
             this.handleTransientError(err);
             throw err;
         }
     }
 
-    /**
-     * Enable temporary, frequent polling (used as a fallback after transient network errors or webhook failures).
-     * After `durationMs` it will stop and re-evaluate app-mode (so webhooks can resume if available).
-     */
-    enableTemporaryPolling(durationMs = this.TEMP_POLL_DURATION_MS) {
+    enableTemporaryPolling() {
         if (!this.pollFn || !this.client) return;
-
-        // If continuous polling is already active, nothing to do.
         if (this.continuousInterval) {
-            console.log('[PollGate] continuous polling active — temporary polling not started.');
+            console.log('[GitHubGate] Continuous polling active — temporary polling not started.');
             return;
         }
-
-        // If a temporary interval already running, extend the timeout.
         if (this.temporaryInterval) {
-            if (this.temporaryTimeout) {
-                clearTimeout(this.temporaryTimeout);
-            }
-            this.temporaryTimeout = setTimeout(() => this.disableTemporaryPollingAndRecheck(), durationMs);
-            console.log('[PollGate] extended temporary polling window by', durationMs, 'ms');
+            console.log('[GitHubGate] Temporary polling is already active.');
+            this.consecutiveEmptyPolls = 0; // Reset counter to give it more time
             return;
         }
 
-        // Start temporary interval
-        this.temporaryInterval = setInterval(() => {
-        if (!this.pollFn || !this.client) return;
-        this.pollFn(this.client).catch(err => {
-            console.error('[PollGate] temporary poll failed:', err);
-        });
-        }, this.POLL_INTERVAL_MS);
+        this.consecutiveEmptyPolls = 0;
+        const MAX_EMPTY_POLLS = 2;
 
-        // run one immediately
-        this.pollFn(this.client).catch(err => {
-        console.error('[PollGate] initial temporary poll failed:', err);
-        });
+        const runTemporaryPoll = async () => {
+            if (!this.pollFn || !this.client) return;
+            try {
+                const processedCount = await this.pollFn(this.client);
+                this.consecutiveEmptyPolls = (processedCount > 0) ? 0 : this.consecutiveEmptyPolls + 1;
+                if (this.consecutiveEmptyPolls >= MAX_EMPTY_POLLS) {
+                    console.log(`[GitHubGate] Backlog cleared (${this.consecutiveEmptyPolls} consecutive empty polls). Disabling temporary polling.`);
+                    this.disableTemporaryPollingAndRecheck();
+                }
+            } catch (err) {
+                console.error('[GitHubGate] Temporary poll failed:', err);
+            }
+        };
 
-        this.temporaryTimeout = setTimeout(() => this.disableTemporaryPollingAndRecheck(), durationMs);
-        console.log('[PollGate] Temporary polling enabled for', durationMs, 'ms');
+        this.temporaryInterval = setInterval(runTemporaryPoll, this.POLL_INTERVAL_MS);
+        runTemporaryPoll(); // Run one immediately
+
+        this.temporaryTimeout = setTimeout(() => {
+            console.warn('[GitHubGate] Temporary polling reached max duration. Disabling.');
+            this.disableTemporaryPollingAndRecheck();
+        }, this.TEMP_POLL_MAX_DURATION_MS);
+
+        console.log('[GitHubGate] Temporary polling enabled. Will stop when backlog is clear or after timeout.');
     }
 
     private disableTemporaryPollingAndRecheck() {
-        if (this.temporaryInterval) {
-            clearInterval(this.temporaryInterval);
-            this.temporaryInterval = null;
-        }
-        if (this.temporaryTimeout) {
-            clearTimeout(this.temporaryTimeout);
-            this.temporaryTimeout = null;
-        }
-        // After temporary polling ends, re-evaluate installation and restore app-mode / continuous mode
+        if (this.temporaryInterval) clearInterval(this.temporaryInterval);
+        if (this.temporaryTimeout) clearTimeout(this.temporaryTimeout);
+        this.temporaryInterval = null;
+        this.temporaryTimeout = null;
+        this.consecutiveEmptyPolls = 0;
         this.evaluateAppMode().catch(err => {
-            console.warn('[PollGate] failed to evaluate after temporary polling:', err);
+            console.warn('[GitHubGate] Failed to re-evaluate after temporary polling:', err);
         });
-        console.log('[PollGate] Temporary polling disabled; re-evaluating app-mode.');
+        console.log('[GitHubGate] Temporary polling disabled; re-evaluating app-mode.');
     }
 
     /**
@@ -242,52 +145,105 @@ class PollGate extends EventEmitter {
      * If error looks transient, enable temporary polling so we can recover any missed events.
      */
     handleTransientError(err: any) {
-        const code = err && (err.code || err.status || err.name) || '';
+        const code = err?.code || err?.status || err?.name || '';
         const transientCodes = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED'];
-        // GitHubApiError and other network failures will fall through here — be conservative.
-        if (typeof code === 'string' && transientCodes.includes(code)) {
-            console.warn('[PollGate] detected transient network error', code, '- enabling temporary polling fallback.');
+        if ((typeof code === 'string' && transientCodes.includes(code)) || (err?.message || '').toLowerCase().includes('network') || err?.name === 'FetchError') {
+            console.warn(`[GitHubGate] Detected transient network error (${code}) - enabling temporary polling fallback.`);
             this.enableTemporaryPolling();
-        } else {
-            // also allow enabling temporary polling when unspecified network error occurs
-            if (err && (err.message || '').toLowerCase().includes('network') || (err && err.name === 'FetchError')) {
-                console.warn('[PollGate] network-like error detected — enabling temporary polling fallback.');
-                this.enableTemporaryPolling();
-            }
         }
+    }
+    
+    isAppModeActive = () => this.appModeActive;
+}
+
+
+/**
+ * Defines the signature for a function that performs a single status poll.
+ * These functions are typically executed periodically to check the status of
+ * a service, an API, or an internal state.
+ *
+ * @param client - The client instance to be used for the polling operation,
+ * providing context and necessary methods (e.g., for making API calls or updating status).
+ * @returns A promise that resolves when the polling operation is complete.
+ */
+type StatusPollFn = (client: Client) => Promise<void>;
+
+/**
+ * Manages updates for Discord Status. Relies on webhooks but falls back to
+ * polling if webhook signals have not been received for a few minutes.
+ */
+class StatusUpdateGate {
+    private client?: Client;
+    private pollFn?: StatusPollFn;
+    private lastWebhookTimestamp = 0;
+    private healthCheckTimer?: NodeJS.Timeout;
+    private pollingInterval?: NodeJS.Timeout;
+    private isPolling = false;
+    private readonly POLLING_INTERVAL_MS = 60_000;
+    private readonly WEBHOOK_HEALTH_THRESHOLD_MS = 5 * 60_000; // 5 minutes
+
+    init(client: Client, pollFn: StatusPollFn) {
+        this.client = client;
+        this.pollFn = pollFn;
+        this.lastWebhookTimestamp = Date.now();
+        this.healthCheckTimer = setInterval(() => this.checkWebhookHealth(), this.POLLING_INTERVAL_MS);
+        console.log('[StatusGate] Initialized and watching webhook health.');
+    }
+
+    webhookReceived() {
+        this.lastWebhookTimestamp = Date.now();
+        if (this.isPolling) {
+            console.log('[StatusGate] Webhook signal received. Reverting to webhook-first mode.');
+            this.stopPolling();
+        }
+    }
+
+    private checkWebhookHealth() {
+        if (this.isPolling) return;
+        const timeSinceLastWebhook = Date.now() - this.lastWebhookTimestamp;
+        if (timeSinceLastWebhook > this.WEBHOOK_HEALTH_THRESHOLD_MS) {
+            console.warn(`[StatusGate] No status webhook received in over ${this.WEBHOOK_HEALTH_THRESHOLD_MS / 60000} minutes. Falling back to polling.`);
+            this.startPolling();
+        }
+    }
+
+    private startPolling() {
+        if (this.isPolling || !this.pollFn || !this.client) return;
+        this.isPolling = true;
+        this.pollFn(this.client).catch(err => console.error('[StatusGate] Initial poll failed:', err));
+        this.pollingInterval = setInterval(() => {
+            if (!this.pollFn || !this.client) return;
+            this.pollFn(this.client).catch(err => console.error('[StatusGate] Continuous status poll error:', err));
+        }, this.POLLING_INTERVAL_MS);
+        console.log('[StatusGate] Started polling for Discord Status updates.');
+    }
+
+    private stopPolling() {
+        if (!this.isPolling) return;
+        if (this.pollingInterval) clearInterval(this.pollingInterval);
+        this.pollingInterval = undefined;
+        this.isPolling = false;
+        console.log('[StatusGate] Stopped polling for Discord Status updates.');
     }
 
     /**
-     * Force re-check if app is installed now.
+     * Public API to force the status gate into polling mode.
+     * Useful when the webhook was received but processing failed and
+     * we want to immediately fallback to polling until the webhook flow recovers.
      */
-    async refreshAppMode() {
-        await this.evaluateAppMode();
-    }
-
-    isAppModeActive() {
-        return this.appModeActive;
-    }
-
-    // graceful shutdown (clear timers)
-    shutdown() {
-        if (this.continuousInterval) {
-            clearInterval(this.continuousInterval);
-            this.continuousInterval = null;
-        }
-        if (this.temporaryInterval) {
-            clearInterval(this.temporaryInterval);
-            this.temporaryInterval = null;
-        }
-        if (this.temporaryTimeout) {
-            clearTimeout(this.temporaryTimeout);
-            this.temporaryTimeout = null;
-        }
-        if (this.recheckTimer) {
-            clearInterval(this.recheckTimer);
-            this.recheckTimer = null;
+    enableTemporaryPolling() {
+        try {
+            if (!this.isPolling) {
+                console.warn('[StatusGate] enableTemporaryPolling called - starting immediate polling fallback.');
+                this.startPolling();
+            } else {
+                // Already polling; nothing to do.
+            }
+        } catch (err) {
+            console.error('[StatusGate] enableTemporaryPolling error:', err);
         }
     }
 }
 
-const singleton = new PollGate();
-export default singleton;
+export const gitHubUpdateGate = new GitHubUpdateGate();
+export const statusUpdateGate = new StatusUpdateGate();

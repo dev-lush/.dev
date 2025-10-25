@@ -4,6 +4,8 @@ import { fetchIncidents, fetchIncidentById, buildStatusContainer } from '../../U
 import { buildCommitCommentPayload, isTokenLoaded, parseSections } from '../../Utils/commitMessage.js';
 import { commandGuard } from '../../Utils/commandGuard.js';
 import { fetchWithToken } from '../../Models/GitHubToken.js';
+import { gitHubUpdateGate } from '../../Utils/pollGate.js';
+await gitHubUpdateGate.requestImmediatePoll().catch(() => { });
 export default {
     data: new SlashCommandBuilder()
         .setName('send')

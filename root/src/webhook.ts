@@ -2,15 +2,17 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import crypto from 'crypto';
 import * as dotenv from 'dotenv';
 import { handleIncidents, fetchActiveIncidents } from './Utils/discordStatus.js';
-import { processSingleCommitComment, GitHubComment } from './Utils/commitMessage.js';
+import { processSingleCommitComment, checkNewCommitComments, GitHubComment } from './Utils/commitMessage.js';
 import { Subscription, SubscriptionType } from './Models/Subscription.js';
-import { Client } from 'discord.js';
+import { Client, TextChannel, NewsChannel, EmbedBuilder } from 'discord.js';
 import nacl from 'tweetnacl';
 import fetch from 'node-fetch';
 import cookieParser from 'cookie-parser';
 import { saveUserToken } from './Models/OAuthToken.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { crosspostMessage } from './Utils/autoPublisher.js';
+import { gitHubUpdateGate, statusUpdateGate } from './Utils/pollGate.js';
 
 dotenv.config();
 
@@ -195,11 +197,68 @@ async function getUserId(token: string): Promise<string> {
 }
 
 /**
+ * Handles incoming push payloads from GitHub webhooks.
+ */
+export async function processPushPayload(client: Client, payload: any): Promise<void> {
+  try {
+    const repo = payload?.repository;
+    const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+    if (!repo || commits.length === 0) {
+        return;
+    }
+
+    const repoFullName = repo.full_name;
+    const repoUrl = repo.html_url;
+    const pusher = payload.pusher?.name ?? 'Unknown';
+    const ref = payload.ref;
+    const branch = ref.startsWith('refs/heads/') ? ref.substring(11) : ref;
+
+    const subs = await Subscription.find({ type: SubscriptionType.PREVIEWS });
+    if (subs.length === 0) return;
+
+    console.log(`[GitHub Push] Processing ${commits.length} commit(s) for ${repoFullName} to ${subs.length} subscription(s).`);
+
+    const embed = new EmbedBuilder()
+        .setColor(0x23272A)
+        .setAuthor({ name: `${repoFullName}:${branch}`, iconURL: 'https://i.imgur.com/qG1im1i.png', url: `${repoUrl}/tree/${branch}` })
+        .setDescription(
+            commits
+                .map((c: any) => `[\`${c.id.substring(0, 7)}\`](${c.url}) ${c.message.split('\n')[0]}`)
+                .join('\n')
+                .substring(0, 4000)
+        )
+        .setFooter({ text: `Pushed by ${pusher}` })
+        .setTimestamp(new Date(payload.head_commit?.timestamp ?? Date.now()));
+
+    for (const sub of subs) {
+        try {
+            const channel = await client.channels.fetch(sub.channelId);
+            if (channel instanceof TextChannel || channel instanceof NewsChannel) {
+                const message = await channel.send({ embeds: [embed] });
+                if (sub.autoPublish && channel instanceof NewsChannel) {
+                    await crosspostMessage(message);
+                }
+            }
+        } catch (err) {
+            console.error(`[GitHub Push] Failed to send message to channel ${sub.channelId} for subscription ${sub._id}:`, err);
+        }
+    }
+  } catch (err) {
+    console.error('[Webhook] processPushPayload error:', err);
+  }
+}
+
+/**
  * Express middleware to handle incoming GitHub webhooks.
  * It verifies the HMAC-SHA256 signature and processes the event in the background
  * using `setImmediate` to avoid blocking the response.
  */
 const handleGithubWebhook: RequestHandler = async (req, res, next) => {
+    // --- Add this logging code for debugging ---
+    console.log('--- GitHub Webhook Request Received ---');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    // -----------------------------------------
+
     if (!GITHUB_WEBHOOK_SECRET) {
         console.warn('GitHub webhook secret is not defined.');
         res.status(500).send('Webhook secret not configured.');
@@ -230,15 +289,29 @@ const handleGithubWebhook: RequestHandler = async (req, res, next) => {
         const client = req.app.get('client') as Client;
         const payload = req.body;
 
-        if (event === 'commit_comment') {
-            if (payload.action === 'created') {
+        try {
+            if (event === 'commit_comment' && payload.action === 'created') {
                 console.log(`✅ GitHub webhook: Received new commit comment ${payload.comment.id}`);
-                await processSingleCommitComment(client, payload.comment as GitHubComment).catch(err => {
+                await processSingleCommitComment(client, payload.comment as GitHubComment).catch(async err => {
                     console.error('Failed to process webhook commit comment:', err);
+                    // fallback: enable temporary polling so any missed comments are recovered
+                    try { gitHubUpdateGate.enableTemporaryPolling(); } catch (e) { /* best-effort */ }
                 });
+            } else if (event === 'push') {
+                setImmediate(async () => {
+                    try {
+                        await checkNewCommitComments(client);
+                    } catch (err) {
+                        console.error('[Webhook] Error triggering commit comment processing after push:', err);
+                        try { gitHubUpdateGate.enableTemporaryPolling(); } catch (e) {}
+                    }
+                });
+            } else if (event === 'ping') {
+                console.log('✅ GitHub webhook ping received successfully.');
             }
-        } else if (event === 'ping') {
-            console.log('✅ GitHub webhook ping received successfully.');
+        } catch (err) {
+            console.error('[Webhook] Unexpected error handling GitHub webhook:', err);
+            try { gitHubUpdateGate.enableTemporaryPolling(); } catch (e) {}
         }
     });
 };
@@ -278,6 +351,12 @@ const handleDiscordStatusWebhook: RequestHandler = async (req, res, next) => {
             return;
         }
 
+        try {
+            statusUpdateGate.webhookReceived();
+        } catch (err) {
+            console.warn('[Webhook] statusUpdateGate.webhookReceived() failed:', err);
+        }
+
         res.status(200).send('Webhook received successfully.');
 
         // Process the webhook payload asynchronously.
@@ -307,6 +386,7 @@ const handleDiscordStatusWebhook: RequestHandler = async (req, res, next) => {
                 }
             } catch (err) {
                 console.error('Error during background processing of Discord Status webhook:', err);
+                try { statusUpdateGate.enableTemporaryPolling(); } catch (e) { /* best-effort */ }
             }
         });
 

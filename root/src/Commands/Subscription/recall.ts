@@ -22,6 +22,9 @@ import {
 import { RoleMentionsHandler } from '../../Models/RoleMentionsHandler.js';
 import { fetchWithToken } from '../../Models/GitHubToken.js';
 import { crosspostMessage } from '../../Utils/autoPublisher.js';
+import { gitHubUpdateGate } from '../../Utils/pollGate.js';
+
+await gitHubUpdateGate.requestImmediatePoll().catch(() => {});
 
 export default {
     data: new SlashCommandBuilder()

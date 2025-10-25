@@ -1,4 +1,5 @@
 /**
+ * @file
  * Utility helpers for building and encoding Discord audit log reasons.
  *
  * - Builds a default "Executed on behalf of <@user-id>" prefix for every action.
@@ -18,9 +19,11 @@ export const AUDIT_LOG_REASON_HEADER = 'X-Audit-Log-Reason';
 export const AUDIT_LOG_REASON_LIMIT_BYTES = 512;
 /**
  * Build the plain (unencoded) audit log reason string.
- * Format:
- *   Executed on behalf of <@userId>
+ * @example
+ *   ```md
+ *   With reason executed on behalf of <@userId>:
  *   <optional custom reason on next line>
+ *   ```
  *
  * @param userId The user id to attribute the execution to.
  * @param customReason Optional user-provided reason.
@@ -32,7 +35,7 @@ export function buildAuditLogReasonPlain(userId, customReason) {
         return executed;
     }
     // Place custom reason below the executed line.
-    const combined = `${executed}:\n${customReason.trim()}`;
+    const combined = `${executed}:\n‘${customReason.trim()}’`;
     // We'll not naively assume encode length; return combined and let encode/truncate handle bytes.
     return combined;
 }
@@ -57,7 +60,7 @@ export function buildAuditLogReasonHeaderValue(plain, limitBytes = AUDIT_LOG_REA
     let prefix = plain;
     let extra = '';
     if (newlineIndex !== -1) {
-        prefix = plain.slice(0, newlineIndex); // "Executed on behalf <@...>"
+        prefix = plain.slice(0, newlineIndex); // "executed on behalf <@...>"
         extra = plain.slice(newlineIndex + 1);
     }
     // Start with full prefix (should be small), then attempt to append as much of extra as will fit.

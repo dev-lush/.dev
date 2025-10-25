@@ -2,7 +2,7 @@ import mongoose, { Schema, Document, model } from 'mongoose';
 import dotenv from 'dotenv';
 import fetch, { RequestInit, Response } from 'node-fetch';
 import { fetchAsApp } from '../Services/GitHubApp.js';
-import PollGate from '../Utils/pollGate.js';
+import { gitHubUpdateGate as PollGate } from '../Utils/pollGate.js';
 
 /**
  * Represents an error that occurred during a GitHub API request.

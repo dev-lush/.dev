@@ -21,15 +21,15 @@ import { warnMissingPerms } from './System Messages/System/permissionNotifier.js
 import { preloadFonts } from './Assets/fonts.js'; 
 import { handleAssetButton } from './Utils/interactionHandlers.js';
 import { handleChannelPermsModal } from './Commands/Management/channel.js';
-import PollGate from './Utils/pollGate.js';
-
+import { gitHubUpdateGate, statusUpdateGate } from './Utils/pollGate.js';
+ 
 const { DISCORD_TOKEN, MONGODB_URI, CLIENT_ID, PORT } = process.env;
-
+ 
 /**
  * Extends the base Discord Client with a `slashCommands` collection.
  */
 interface MyClient extends Client {
-  slashCommands: Collection<string, {
+   slashCommands: Collection<string, {
     data: any;
     execute: (interaction: any) => Promise<void>;
     autocomplete?: (interaction: any) => Promise<void>;
@@ -37,7 +37,7 @@ interface MyClient extends Client {
     handleDocSelect?: (interaction: StringSelectMenuInteraction) => Promise<void>;
   }>;
 }
-
+ 
 // Centralized error handling for unhandled promise rejections and uncaught exceptions.
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
@@ -45,7 +45,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
-
+ 
 /**
  * Initializes and starts the Discord bot and all related services.
  * This includes connecting to the database, loading commands, starting the web server,
@@ -62,18 +62,18 @@ async function startBot() {
     console.error('Missing required environment variables'); 
     process.exit(1);
   }
-
+ 
   // Connect to MongoDB before doing anything else.
   await connectDatabase(MONGODB_URI).catch(err => {
     console.error('❌ Database connection failed:', err);
     process.exit(1);
   });
-
+ 
   // Initialize GitHub tokens from environment variables.
   await initializeGitHubTokens().catch(err => {
     console.error('⚠️ Could not initialize GitHub tokens:', err);
   });
-
+ 
   // Preload custom fonts for the image generator.
   await preloadFonts();
 
@@ -113,7 +113,6 @@ async function startBot() {
       }
     }
   };
-
   await loadCommands(commandsPath);
 
   // Start the Express server for webhooks before logging in the Discord client.
@@ -283,37 +282,25 @@ async function startBot() {
  * @param client The authenticated Discord client instance.
  */
 async function startPolling(client: MyClient) {
-  // Poll for new GitHub commit comments every 15 seconds.
-  const pollCommits = async () => {
-    try {
-      if (PollGate.isAppModeActive && PollGate.isAppModeActive()) {
-        return;
-      }
-      await checkNewCommitComments(client);
-    } catch (err) {
-      console.error('❌ Error polling commit comments:', err);
-    }
-  };
-  pollCommits();
-  setInterval(pollCommits, 15_000);
-
+  // GitHub commit comment polling is now entirely managed by the GitHubUpdateGate.
   // Poll for Discord Status updates every 60 seconds.
-  const pollStatus = async () => {
+  // This is now managed by the StatusUpdateGate to allow fallback from webhooks.
+  const pollStatusFn = async (c: Client) => {
     try {
       const subscriptions = await Subscription.find({ type: SubscriptionType.STATUS });
       if (subscriptions.length === 0) return;
 
       const activeIncidents = await fetchActiveIncidents();
-      for (const subscription of subscriptions) {
-        await handleIncidents(client, subscription, activeIncidents);
+        for (const subscription of subscriptions) {
+      await handleIncidents(c, subscription, activeIncidents);
       }
     } catch (err) {
       console.error('❌ Error polling status incidents:', err);
     }
   };
-  pollStatus();
-  setInterval(pollStatus, 60_000);
-
+  // Initialize the status update gatekeeper
+  statusUpdateGate.init(client, pollStatusFn);
+  
   // Periodically clean up subscriptions for channels that no longer exist.
   setInterval(async () => {
     try {
@@ -362,18 +349,18 @@ async function startPolling(client: MyClient) {
   // or to rely on webhooks (if the App is installed), and it can enable temporary polling
   // on transient failures.
   try {
-    await PollGate.init(client, async (c) => {
+    await gitHubUpdateGate.init(client, async (c) => {
       try {
-        await checkNewCommitComments(c);
+        const processedCount = await checkNewCommitComments(c);
+        return processedCount;
       } catch (err) {
         console.error('❌ Error during commit poll (controller):', err);
         throw err;
       }
-      return 0;
     });
   } catch (err) {
-    console.warn('[bot] PollGate.init failed, falling back to immediate poll + continuous interval.');
-    // fallback: run one immediate poll and continue to start a basic setInterval so bot remains functional
+    console.warn('[bot] GitHubUpdateGate.init failed, falling back to basic polling interval.');
+    // fallback: if the gate fails to init, start a basic setInterval so bot remains functional.
     const fallbackPoll = async () => {
       try { await checkNewCommitComments(client); } catch (e) { console.error('[bot] fallback poll error:', e); }
     };

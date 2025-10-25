@@ -956,9 +956,9 @@ export async function handleChannelPermsModal(interaction: ModalSubmitInteractio
     const deniedKeys = Array.from(unionKeys).filter(k => (overwriteOptions as any)[k] === false && permOverrideMap.has(k));
     const inheritedKeys = Array.from(unionKeys).filter(k => (overwriteOptions as any)[k] === null && permOverrideMap.has(k));
     
-    const allowedLines = buildLines(allowedKeys, '<:Check_Coloured:1406896084168609824>');
-    const inheritedLines = buildLines(inheritedKeys, '<:Slash_Coloured:1406896106117533758>');
-    const deniedLines = buildLines(deniedKeys, '<:X_Coloured:1406896126187016284>');
+    const allowedLines = buildLines(allowedKeys, '<:Check_Coloured:1431463796563771462>');
+    const inheritedLines = buildLines(inheritedKeys, '<:Slash_Coloured:1431463800816537731>');
+    const deniedLines = buildLines(deniedKeys, '<:X_Coloured:1431463798811918442>');
 
     const allowedContent = allowedLines.length > 0 ? allowedLines.join('\n') : '';
     const inheritedContent = inheritedLines.length > 0 ? inheritedLines.join('\n') : '';

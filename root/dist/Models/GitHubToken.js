@@ -2,7 +2,7 @@ import mongoose, { Schema, model } from 'mongoose';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import { fetchAsApp } from '../Services/GitHubApp.js';
-import PollGate from '../Utils/pollGate.js';
+import { gitHubUpdateGate as PollGate } from '../Utils/pollGate.js';
 /**
  * Represents an error that occurred during a GitHub API request.
  * It includes the HTTP status code and status text from the response.
