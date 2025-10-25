@@ -412,7 +412,7 @@ export async function checkNewCommitComments(client) {
             console.warn('[commitMessage] Skipping polling: No active GitHub tokens available');
             lastRateLimitWarn = Date.now();
         }
-        return;
+        return 0;
     }
     try {
         let cp = await CommitCommentCheckpoint.findById('global');
@@ -481,7 +481,7 @@ export async function checkNewCommitComments(client) {
                     console.error('[init-checkpoint] Failed to create initial checkpoint:', error);
                 }
             }
-            return; // Exit to start fresh on the next poll
+            return 0; // Exit to start fresh on the next poll
         }
         // 2. Collect new comments from multiple sources to ensure reliability
         const allComments = new Map();
@@ -555,7 +555,7 @@ export async function checkNewCommitComments(client) {
         if (newComments.length === 0) {
             if (isFirstPoll)
                 isFirstPoll = false;
-            return;
+            return 0;
         }
         console.log(`[polling] Found ${newComments.length} new commit comments to process from combined strategies.`);
         let lastSuccessfullyProcessedId = cp.lastProcessedCommentId || 0;
@@ -636,9 +636,11 @@ export async function checkNewCommitComments(client) {
             await CommitCommentCheckpoint.findByIdAndUpdate('global', { $set: { lastProcessedCommentId: lastSuccessfullyProcessedId } })
                 .catch(err => console.error('[polling] Failed to persist final batch checkpoint update:', err));
         }
+        return newComments.length;
     }
     catch (error) {
         console.error('Failed to check new commit comments:', error);
+        return 0;
     }
 }
 /**
