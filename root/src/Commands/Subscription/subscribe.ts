@@ -86,13 +86,13 @@ export default {
       const canPublish = targetChannel.permissionsFor(me)?.has('ManageMessages');
       if (!canPublish) {
         await interaction.followUp({
-          content: '<:Warning:1326742459912425494> Auto-publish is enabled, but the app lacks the `Manage Messages` permission required to [crosspost](<https://support.discord.com/hc/en-us/articles/360032008192-Announcement-Channel-FAQ#:~:text=Grant%20permissions%20only%20to%20trusted%20members.%20Send%20Messages%20permission%20lets%20members%20publish%20their%20own%20messages,%20Manage%20Messages%20allows%20them%20to%20publish%20any%20message%20in%20the%20channel.%20You%20can%20configure%20these%20settings%20in%20the%20Permissions%20tab.>) in announcement channels.',
+          content: '<:Caution:1432028786957746177> Auto-publish is enabled, but the app lacks the `Manage Messages` permission required to [crosspost](<https://support.discord.com/hc/en-us/articles/360032008192-Announcement-Channel-FAQ#:~:text=Grant%20permissions%20only%20to%20trusted%20members.%20Send%20Messages%20permission%20lets%20members%20publish%20their%20own%20messages,%20Manage%20Messages%20allows%20them%20to%20publish%20any%20message%20in%20the%20channel.%20You%20can%20configure%20these%20settings%20in%20the%20Permissions%20tab.>) in announcement channels.',
           flags: MessageFlags.Ephemeral
         });
       }
     } else if (autoPublish && !(targetChannel instanceof NewsChannel)) {
       return interaction.reply({
-        content: '<:Cross:1425291759952593066> Auto-publish is only supported in [announcement channels](<https://support.discord.com/hc/en-us/articles/360032008192-Announcement-Channel-FAQ>).',
+        content: '<:Caution:1432028786957746177> Auto-publish is only supported in [announcement channels](<https://support.discord.com/hc/en-us/articles/360032008192-Announcement-Channel-FAQ>).',
         flags: MessageFlags.Ephemeral
       });
     }

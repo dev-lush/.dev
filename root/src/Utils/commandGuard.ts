@@ -37,7 +37,7 @@ export async function commandGuard(
   // DM-only restriction check
   if (options.dmOnly && interaction.inGuild()) {
     await interaction.reply({
-      content: "<:Warning:1395719352560648274> This command can only be used in Direct Messages.",
+      content: "<:Caution:1432028786957746177> This command can only be used in Direct Messages.",
       flags: MessageFlags.Ephemeral
     });
     return false;
@@ -46,7 +46,7 @@ export async function commandGuard(
   // Guild-only restriction check
   if (options.guildOnly && !interaction.inGuild()) {
     await interaction.reply({
-      content: "<:Warning:1395719352560648274> This command must be used inside a server.",
+      content: "<:Caution:1432028786957746177> This command must be used inside a server.",
       flags: MessageFlags.Ephemeral
     });
     return false;
@@ -60,7 +60,7 @@ export async function commandGuard(
       const missing = botMember.permissions.missing(options.requireBotPermissions);
       if (missing.length > 0) {
         await interaction.reply({
-          content: `<:Warning:1395719352560648274> The application is unable to process the command. Make sure that the application has the following permission(s): \`${missing.join(", ")}\`.`,
+          content: `<:Caution:1432028786957746177> The application is unable to process the command. Make sure that the application has the following permission(s): \`${missing.join(", ")}\`.`,
           flags: MessageFlags.Ephemeral
         });
         return false;
@@ -75,7 +75,7 @@ export async function commandGuard(
       const missing = member.permissions.missing(options.requireMemberPermissions);
       if (missing.length > 0) {
         await interaction.reply({
-          content: `<:Warning:1395719352560648274> You are missing the required permission(s) to use this command: \`${missing.join(", ")}\`.`,
+          content: `<:Caution:1432028786957746177> You are missing the required permission(s) to use this command: \`${missing.join(", ")}\`.`,
           flags: MessageFlags.Ephemeral
         });
         return false;
@@ -88,7 +88,7 @@ export async function commandGuard(
     const ownerId = process.env.OWNER;
     if (!ownerId || interaction.user.id !== ownerId) {
       await interaction.reply({
-        content: `<:Warning:1395719352560648274> You are not authorized to run this command.`,
+        content: `<:Caution:1432028786957746177> You are not authorized to run this command.`,
         flags: MessageFlags.Ephemeral
       });
       return false;

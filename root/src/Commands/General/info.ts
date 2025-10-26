@@ -59,7 +59,7 @@ export default {
             let memberCount: number | null = null;
             let presenceCount: number | null = null;
 
-            const inviteRegex = /(?:discord\.(?:gg|io|me|li)|discordapp\.com\/invite)\/([a-zA-Z0-9\-]+)/;
+            const inviteRegex = /(?:discord\.gg|(?:discordapp|discord)\.com\/invite)\/([a-zA-Z0-9\-]+)/;
             const match = query.match(inviteRegex);
 
             try {

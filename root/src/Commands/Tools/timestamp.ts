@@ -1,3 +1,7 @@
+/**
+ * @file Slash command to generate a Discord timestamp.
+ */
+
 import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
@@ -9,10 +13,6 @@ import {
 } from 'discord.js';
 import { commandGuard } from '../../Utils/commandGuard.js';
 import { formatDiscordTimestamps } from '../../Utils/time.js';
-
-/**
- * @file Slash command to generate a Discord timestamp.
- */
 
 const commandBuilder = new SlashCommandBuilder()
     .setName('timestamp')
@@ -37,7 +37,15 @@ const commandBuilder = new SlashCommandBuilder()
     .addIntegerOption(option => option.setName('date').setDescription('Day of the month (1-31). Defaults to the current date.'))
     .addIntegerOption(option => option.setName('hour').setDescription('Hour in 24-hour format (0-23). Defaults to the current hour.'))
     .addIntegerOption(option => option.setName('minute').setDescription('Minute (0-59). Defaults to the current minute.'))
-    .addIntegerOption(option => option.setName('second').setDescription('Second (0-59). Defaults to the current second.'));
+    .addIntegerOption(option => option.setName('second').setDescription('Second (0-59). Defaults to the current second.'))
+    .addStringOption(option =>
+        option.setName('mentions')
+            .setDescription('Mentions to include. Separate with commas. Ex: @user, @role, @everyone')
+            .setRequired(false))
+    .addBooleanOption(option =>
+        option.setName('ephemeral')
+            .setDescription('Whether to make the message ephemeral. Defaults to true.')
+            .setRequired(false));
 
 export default {
     data: commandBuilder,
@@ -52,6 +60,30 @@ export default {
         // Ensure the command can be used in the current context.
         const passed = await commandGuard(interaction, { global: true });
         if (!passed) return;
+        
+        const mentionsInput = interaction.options.getString('mentions');
+        let ephemeral = interaction.options.getBoolean('ephemeral') ?? true;
+
+        if (mentionsInput) {
+            ephemeral = false;
+        }
+
+        let mentionsContent: string | undefined;
+        if (mentionsInput && !ephemeral) {
+            const mentionRegex = /(<@!?\d+>|<@&\d+>|@everyone|@here)/g;
+            const validMentions = mentionsInput.match(mentionRegex);
+
+            if (validMentions) {
+                if (interaction.inGuild()) {
+                    mentionsContent = validMentions.join(' ');
+                } else {
+                    const userMentions = validMentions.filter(m => m.match(/^<@!?\d+>$/));
+                    if (userMentions.length > 0) {
+                        mentionsContent = userMentions.join(' ');
+                    }
+                }
+            }
+        }
 
         const format = interaction.options.getString('format', true) as keyof ReturnType<typeof formatDiscordTimestamps>;
 
@@ -82,9 +114,9 @@ export default {
         if (errors.length > 0) {
             let errorContent: string;
             if (errors.length === 1) {
-                errorContent = `<:Warning:1395719352560648274> Invalid input: ${errors[0]}`;
+                errorContent = `<:Caution:1432028786957746177> Invalid input: ${errors[0]}`;
             } else {
-                errorContent = `<:Warning:1395719352560648274> Invalid input:\n- ${errors.join('\n- ')}`;
+                errorContent = `<:Caution:1432028786957746177> Invalid input:\n- ${errors.join('\n- ')}`;
             }
 
             const exampleDate = new Date();
@@ -101,7 +133,7 @@ export default {
 
             const container = new ContainerBuilder()
                 .addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`-# <:Events:1424617114597326878> </timestamp:1422972419206811709>\n${exampleContent}`)
+                    new TextDisplayBuilder().setContent(`### -# <:Events:1431983717605441667> </timestamp:1422972419206811709>\n${exampleContent}`)
                 );
 
             await interaction.reply({
@@ -120,10 +152,29 @@ export default {
         const timestamps = formatDiscordTimestamps(finalDate);
         const selectedTimestamp = timestamps[format];
 
+        if (ephemeral) {
+            await interaction.reply({
+                content: `${selectedTimestamp} — \`${selectedTimestamp}\``,
+                flags: MessageFlags.Ephemeral
+            });
+            return;
+        }
+
+        const container = new ContainerBuilder()
+            .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`### -# <:Events:1431983717605441667> </timestamp:1422972419206811709>\n${selectedTimestamp} — \`${selectedTimestamp}\``)
+            );
+        
+        const components: any[] = [container];
+
+        if (mentionsContent) {
+            components.push({ type: 10, content: mentionsContent });
+        }
+
         // Reply with the selected timestamp, showing both the raw string and its rendered output.
         await interaction.reply({
-            content: `${selectedTimestamp} - \`${selectedTimestamp}\``,
-            flags: MessageFlags.Ephemeral
+            components,
+            flags: MessageFlags.IsComponentsV2
         });
     }
 };
