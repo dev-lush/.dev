@@ -1,0 +1,25 @@
+{
+  "name": "developer-utils-discord-bot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch root/src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "build:check": "npm run build && node scripts/check-dist.js",
+    "start": "node root/dist/index.js",
+    "start:production": "npm run build:check && npm start"
+  },
+  "dependencies": {
+    "discord.js": "^14.28.1",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "mongoose": "^9.12.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

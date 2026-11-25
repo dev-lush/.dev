@@ -1,0 +1,1 @@
+Compiled JS files. Refer to `package.json`.

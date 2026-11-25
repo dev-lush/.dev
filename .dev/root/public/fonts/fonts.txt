@@ -1,0 +1,1 @@
+Fonts used for the `authorized.html` (landing page after authorization/user install).
